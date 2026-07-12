@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.sqlite3
+*.db
+data/simulated/*.npz
+data/simulated/*.csv
+data/models/*.h5
+data/models/*.keras
+.vscode/
+.idea/
+*.log
+docx_content.txt
+docs/screenshots/*.png
+
+# Trained model artifacts (regenerable via the Training page / fit_final_model)
+data/models/*.pt
+# Stray/unreferenced datasets — confirm provenance before committing (CLAUDE.md: no real patient data)
+/eeg_dataset.csv
+/rtms_dataset_500.csv
+/rtms_dataset_500_patients_clean.csv
