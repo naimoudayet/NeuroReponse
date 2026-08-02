@@ -15,8 +15,10 @@ class PatientRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     nom: Mapped[str] = mapped_column(String)
-    age: Mapped[int]
+    age: Mapped[float]
     diagnostic: Mapped[str] = mapped_column(String)
+    # Nullable : le simulateur séquentiel historique ne publie pas cette variable.
+    sexe: Mapped[int | None] = mapped_column(default=None)
     historique_json: Mapped[str] = mapped_column(String, default="[]")
 
     sessions: Mapped[list[SessionRow]] = relationship(

@@ -9,13 +9,15 @@ import pandas as pd
 
 @dataclass
 class LoadedDataset:
-    signals: np.ndarray   # (n_patients, n_sessions, window)  — EEG
+    signals: np.ndarray   # (n_patients, n_sessions, window)  — EEG (single representative channel)
     labels: np.ndarray    # (n_patients,)
     fs: float
     window: int
     metadata: pd.DataFrame
     erp: np.ndarray | None = None   # (n_patients, n_sessions, window)  — evoked potential
     ecg: np.ndarray | None = None   # (n_patients, n_sessions, n_rr)    — RR intervals (s)
+    channels: list[str] | None = None    # EEG channel names when a full montage is available
+    signals_mc: np.ndarray | None = None  # (n_patients, n_sessions, n_channels, window) — full montage
 
 
 def load(data_dir: Path = Path("data/simulated")) -> LoadedDataset:

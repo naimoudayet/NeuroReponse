@@ -103,6 +103,31 @@ def test_prediction_afficher_and_ecart():
     assert ecart["predit"] == 1
 
 
+def test_analyser_ecart_takes_a_response_fraction_not_a_severity_score():
+    """`score_clinique_observe` is the BDI-II *reduction* in [0, 1], not the raw score.
+
+    Regression guard: the Predictions page used to pass the post-treatment BDI as
+    ``score/30``, which is both the wrong quantity and the wrong polarity — a low
+    post-treatment score means a *good* outcome, yet scored as a non-responder. The
+    page then showed "60% de réduction -> répondeur" directly above
+    "observe: 0, concordance: false".
+    """
+    pred = Prediction(patient_id="P1", valeur=1, probabilite=0.66,
+                      model_version="v1", date=datetime(2026, 1, 1))
+
+    # BDI-II 20 -> 8 is a 60% reduction: a responder.
+    good = pred.analyser_ecart((20 - 8) / 20)
+    assert good["observe"] == 1
+    assert good["concordance"] is True
+
+    # BDI-II 29 -> 29 is no improvement: a non-responder.
+    bad = pred.analyser_ecart((29 - 29) / 29)
+    assert bad["observe"] == 0
+
+    # The old, inverted call would have scored the responder as a non-responder.
+    assert pred.analyser_ecart(8 / 30.0)["observe"] == 0
+
+
 def test_clinician_modifier_parametres():
     ci = ClinicianInterface(nom_utilisateur="dr_test")
     params = RTMSParameters(

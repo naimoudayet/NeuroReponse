@@ -1,5 +1,6 @@
 # Core scientific
-numpy>=1.26,<2.2
+# The <2.2 cap was stale: this project runs and passes its full suite on numpy 2.4.
+numpy>=1.26
 scipy>=1.11
 pandas>=2.1
 
@@ -8,6 +9,12 @@ scikit-learn>=1.4
 # Python 3.14 dropped TensorFlow support; PyTorch CPU works.
 # Install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.4
+
+# Real EEG (TDBRAIN loader): mne reads the BioSemi BDF recordings.
+# mne's reader is self-contained; edfio is only needed to *write* BDF
+# (synthetic test fixtures / mne export), not to read real data.
+mne>=1.6
+edfio>=0.4
 
 # Persistence
 SQLAlchemy>=2.0
@@ -21,8 +28,14 @@ matplotlib>=3.8
 jupyterlab>=4.0
 ipykernel>=6.29
 
-# Reports
+# Reports & documentation
+# reportlab: PDF export from the Predictions page (needed at runtime).
+# python-docx + playwright: only for regenerating docs/Guide_*.docx and the
+# screenshots it embeds (src/reporting/user_guide.py, capture_screens.py).
+# Playwright also needs its browser binary once: python -m playwright install chromium
 reportlab>=4.1
+python-docx>=1.1
+playwright>=1.40
 
 # Dev tooling
 pytest>=8.0

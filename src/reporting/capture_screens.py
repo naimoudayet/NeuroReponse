@@ -1,15 +1,23 @@
 """Drive the running Streamlit app with Playwright and save PNG screenshots.
 
 Usage:
-    1. Make sure DB is seeded + model is trained:
-         python -m src.data.seeder
+    1. Make sure the databases are seeded and the models trained:
+         python -m src.data.seeder                       # simulated
+         python -m src.models.train_tdbrain --root <TDBRAIN root> \
+             --seed-db recherche_tdbrain.sqlite3         # real
     2. Start the app on port 8765:
          streamlit run src/app/main.py --server.headless true --server.port 8765
     3. Run:
-         python -m src.reporting.capture_screens
+         python -m src.reporting.capture_screens               # both cohorts
+         python -m src.reporting.capture_screens --source tdbrain
+
+Navigation deliberately clicks the sidebar links rather than calling ``goto`` per
+page: a full page load starts a **new Streamlit session**, which would reset the
+data-source selector back to the simulated cohort mid-capture.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -20,9 +28,24 @@ BASE_URL = "http://localhost:8765"
 OUT_DIR = Path("docs/screenshots")
 VIEWPORT = {"width": 1400, "height": 900}
 
+# (sidebar link label, screenshot suffix) — order matches the guide's walkthrough.
+PAGES: list[tuple[str, str]] = [
+    ("Patients", "patients"),
+    ("Sessions", "sessions"),
+    ("Training", "training"),
+    ("Predictions", "predictions"),
+    ("Suivi", "suivi"),
+    ("Boucle clinique", "boucle"),
+]
 
-def _wait_for_app(page: Page, max_wait: float = 30.0) -> None:
-    """Wait until Streamlit finishes its initial render."""
+SOURCE_LABELS = {
+    "simule": "Données simulées",
+    "tdbrain": "TDBRAIN (EEG réel)",
+}
+
+
+def _wait_for_app(page: Page, max_wait: float = 60.0) -> None:
+    """Wait until Streamlit finishes rendering (no running status widget)."""
     end = time.time() + max_wait
     while time.time() < end:
         try:
@@ -46,44 +69,106 @@ def _shot(page: Page, name: str) -> Path:
     return path
 
 
-def capture(page: Page) -> None:
-    # 1. Home
+def _select_source(page: Page, source: str) -> None:
+    """Click the sidebar cohort radio and wait for the rerun."""
+    label = SOURCE_LABELS[source]
+    page.get_by_text(label, exact=True).first.click()
+    _wait_for_app(page)
+    time.sleep(1.5)
+
+
+def _run_cross_validation(page: Page, timeout_s: float = 600.0) -> bool:
+    """Click 'Lancer la validation croisée' and wait for the metrics to appear.
+
+    A guide screenshot of an empty form teaches nothing; this captures the page
+    with real cross-validation output. Returns False if it did not finish in time.
+    """
+    try:
+        page.get_by_role("button", name="Lancer la validation croisée patient-wise").click()
+    except Exception as exc:
+        print(f"  note: could not start cross-validation ({exc})", file=sys.stderr)
+        return False
+    end = time.time() + timeout_s
+    while time.time() < end:
+        _wait_for_app(page, max_wait=15.0)
+        if page.locator("[data-testid='stMetric']").count() >= 3:
+            time.sleep(2.0)
+            return True
+        time.sleep(2.0)
+    print("  note: cross-validation did not finish in time", file=sys.stderr)
+    return False
+
+
+def _select_ecg_channel(page: Page) -> bool:
+    """On the Sessions page, switch the channel picker to the ECG lead.
+
+    The tachogram view is the visual proof that the autonomic modality is stored,
+    so the guide needs it. The dropdown is virtualised (the ECG row is the 27th),
+    hence typing to filter rather than scrolling.
+    """
+    try:
+        boxes = page.locator("div[data-baseweb='select']")
+        if boxes.count() < 2:
+            return False
+        boxes.nth(boxes.count() - 1).click()
+        time.sleep(1.0)
+        page.keyboard.type("Erbs")
+        time.sleep(1.2)
+        opts = page.locator("li[role='option']")
+        if not opts.count():
+            page.keyboard.press("Escape")
+            return False
+        opts.first.click()
+        _wait_for_app(page)
+        time.sleep(2.0)
+        return True
+    except Exception as exc:  # capture is best-effort; never abort the run
+        print(f"  note: could not select the ECG channel ({exc})", file=sys.stderr)
+        return False
+
+
+def capture(page: Page, source: str, prefix: str, train: bool = True) -> None:
+    print(f"\n== capturing cohort '{source}' (prefix {prefix}) ==")
     page.goto(f"{BASE_URL}/", wait_until="networkidle")
     _wait_for_app(page)
-    _shot(page, "01_home.png")
+    _select_source(page, source)
+    _shot(page, f"{prefix}01_home.png")
 
-    # 2. Patients
-    page.goto(f"{BASE_URL}/Patients", wait_until="networkidle")
-    _wait_for_app(page)
-    time.sleep(1.5)
-    _shot(page, "02_patients.png")
-
-    # 3. Sessions
-    page.goto(f"{BASE_URL}/Sessions", wait_until="networkidle")
-    _wait_for_app(page)
-    time.sleep(1.5)
-    _shot(page, "03_sessions.png")
-
-    # 4. Training
-    page.goto(f"{BASE_URL}/Training", wait_until="networkidle")
-    _wait_for_app(page)
-    time.sleep(1.5)
-    _shot(page, "04_training.png")
-
-    # 5. Predictions
-    page.goto(f"{BASE_URL}/Predictions", wait_until="networkidle")
-    _wait_for_app(page)
-    time.sleep(2.0)
-    _shot(page, "05_predictions.png")
+    for idx, (link, suffix) in enumerate(PAGES, start=2):
+        page.get_by_role("link", name=link).first.click()
+        _wait_for_app(page)
+        time.sleep(2.0)
+        if suffix == "training" and train:
+            _shot(page, f"{prefix}04_training_form.png")
+            if _run_cross_validation(page):
+                _shot(page, f"{prefix}04_training.png")
+                continue
+        _shot(page, f"{prefix}{idx:02d}_{suffix}.png")
+        # Extra shot: the ECG tachogram only exists on the real cohort.
+        if suffix == "sessions" and source == "tdbrain" and _select_ecg_channel(page):
+            _shot(page, f"{prefix}{idx:02d}b_sessions_ecg.png")
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Screenshot the Streamlit app.")
+    ap.add_argument("--source", choices=("simule", "tdbrain", "both"), default="both")
+    ap.add_argument("--no-train", action="store_true",
+                    help="skip running cross-validation before the Training shot")
+    args = ap.parse_args()
+
+    targets = (
+        [("simule", ""), ("tdbrain", "td_")]
+        if args.source == "both"
+        else [(args.source, "" if args.source == "simule" else "td_")]
+    )
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(viewport=VIEWPORT, device_scale_factor=1)
         page = ctx.new_page()
         try:
-            capture(page)
+            for source, prefix in targets:
+                capture(page, source, prefix, train=not args.no_train)
         finally:
             ctx.close()
             browser.close()

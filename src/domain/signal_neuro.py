@@ -43,6 +43,15 @@ class SignalNeurophysiologique:
         return sliding_windows(self.valeurs, window_size, hop or window_size)
 
     def extraire_features(self) -> dict[str, float]:
-        from ..preprocessing.features import basic_features
+        """Feature dict appropriate to the modality.
 
+        ECG is stored as an **RR tachogram** (event-sampled, ``sampling_rate_hz``
+        is 0), so the spectral features that suit a uniformly-sampled trace do not
+        apply — it gets time-domain HRV metrics instead. Every other type keeps the
+        band-power/statistics contract.
+        """
+        from ..preprocessing.features import basic_features, hrv_features
+
+        if self.type_signal is SignalType.ECG:
+            return hrv_features(self.valeurs)
         return basic_features(self.valeurs, self.sampling_rate_hz)

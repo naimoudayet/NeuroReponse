@@ -41,11 +41,33 @@ class FoldResult:
     auc: float
     f1: float
     best_epoch: int
+    # Held-out probabilities for this fold's validation patients. Kept so ROC,
+    # calibration and confusion charts can be drawn from a single CV run: without
+    # them every plot would need its own retraining pass, and any drift between
+    # those passes would be invisible.
+    val_proba: np.ndarray = field(default_factory=lambda: np.empty(0))
 
 
 @dataclass
 class CVResult:
     folds: list[FoldResult] = field(default_factory=list)
+
+    def out_of_fold(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Concatenated held-out ``(y_true, y_proba)`` over every fold.
+
+        GroupKFold gives each patient exactly one validation appearance, so this
+        is a complete out-of-fold prediction for the cohort — the honest basis for
+        an ROC or calibration curve, with no patient scored by a model that saw
+        them in training.
+        """
+        if not self.folds or self.folds[0].val_proba.size == 0:
+            raise ValueError(
+                "no stored validation probabilities — this CVResult predates "
+                "val_proba, re-run cross_validate()"
+            )
+        idx = np.concatenate([f.val_idx for f in self.folds])
+        proba = np.concatenate([f.val_proba for f in self.folds])
+        return np.asarray(y)[idx], proba
 
     def summary(self) -> dict[str, float]:
         if not self.folds:
@@ -139,7 +161,10 @@ def train_one_fold(
     return train_losses, val_losses, best_epoch
 
 
-def _evaluate(model: ResponseLSTM, x_val, y_val, device: torch.device) -> tuple[float, float, float]:
+def _evaluate(
+    model: ResponseLSTM, x_val, y_val, device: torch.device
+) -> tuple[float, float, float, np.ndarray]:
+    """Metrics **and** the raw probabilities, so callers can plot from one pass."""
     model.eval()
     with torch.no_grad():
         logits = model(_to_tensor(x_val).to(device))
@@ -152,7 +177,7 @@ def _evaluate(model: ResponseLSTM, x_val, y_val, device: torch.device) -> tuple[
         auc = roc_auc_score(y_val, proba)
     except ValueError:
         auc = float("nan")  # all-one-class fold
-    return float(acc), float(auc), float(f1)
+    return float(acc), float(auc), float(f1), proba
 
 
 def cross_validate(
@@ -181,7 +206,9 @@ def cross_validate(
             x[va_idx], y[va_idx].astype(np.float32),
             train_cfg,
         )
-        acc, auc, f1 = _evaluate(model, x[va_idx], y[va_idx], torch.device(train_cfg.device))
+        acc, auc, f1, proba = _evaluate(
+            model, x[va_idx], y[va_idx], torch.device(train_cfg.device)
+        )
         result.folds.append(
             FoldResult(
                 fold=fold,
@@ -193,6 +220,7 @@ def cross_validate(
                 auc=auc,
                 f1=f1,
                 best_epoch=best_epoch,
+                val_proba=np.asarray(proba, dtype=np.float64),
             )
         )
     return result

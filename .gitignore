@@ -22,7 +22,14 @@ docs/screenshots/*.png
 
 # Trained model artifacts (regenerable via the Training page / fit_final_model)
 data/models/*.pt
+# Feature-contract sidecars — meaningless without their .pt, regenerated with it
+data/models/*.json
 # Stray/unreferenced datasets — confirm provenance before committing (CLAUDE.md: no real patient data)
 /eeg_dataset.csv
 /rtms_dataset_500.csv
 /rtms_dataset_500_patients_clean.csv
+
+# Real TDBRAIN data — gated, under a Data Use Agreement, never commit (CLAUDE.md, docs/tdbrain.md)
+data/tdbrain/*
+!data/tdbrain/README.md
+!data/tdbrain/.gitkeep

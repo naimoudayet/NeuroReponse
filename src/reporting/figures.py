@@ -2,9 +2,15 @@
 
 Usage:
     python -m src.reporting.figures               # writes docs/figures/*.png
+    python -m src.reporting.figures --comparison-only   # no retraining
+
+The alpha/CV/diagnostics figures describe the **legacy sequential** simulated
+pipeline (phases 1-4) and require retraining it, which is why they are slow. The
+2x2 comparison figure reads ``data/models/comparison.json`` and costs nothing.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -17,7 +23,11 @@ from sklearn.model_selection import GroupKFold
 from ..data.loader import load
 from ..models.lstm import LSTMConfig, ResponseLSTM
 from ..models.train import TrainConfig, _to_tensor, cross_validate, train_one_fold
+from ..models.variants import ORDERED
 from ..preprocessing.pipeline import PipelineConfig, preprocess
+from . import model_charts as mc
+
+COMPARISON_JSON = Path("data/models/comparison.json")
 
 
 def _save(fig, out_dir: Path, name: str) -> Path:
@@ -102,6 +112,56 @@ def figure_diagnostics(y: np.ndarray, oof_proba: np.ndarray, out_dir: Path) -> P
     return _save(fig, out_dir, "diagnostics.png")
 
 
+def figure_comparison_2x2(results: list[dict], out_dir: Path) -> Path:
+    """The four models side by side: AUC against chance, accuracy against base rate.
+
+    Two panels rather than two y-axes, and the accuracy panel draws the majority
+    -class rate explicitly — an accuracy bar alone reads as performance when it is
+    really the base rate, which is the single most misread number in this project.
+    """
+    by_key = {r["key"]: r for r in results}
+    rows = [by_key[v.value] for v in ORDERED if v.value in by_key]
+    labels = [r["key"] for r in rows]
+    x = np.arange(len(rows))
+    colours = [mc.SERIES[0] if r["dataset"] == "simule" else mc.SERIES[1] for r in rows]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.3))
+    fig.patch.set_facecolor(mc.SURFACE)
+    for ax in axes:
+        ax.set_facecolor(mc.SURFACE)
+
+    axes[0].bar(x, [r["auc_mean"] for r in rows], 0.6, color=colours,
+                yerr=[r["auc_std"] for r in rows], ecolor=mc.AXIS, capsize=4)
+    axes[0].axhline(mc.CHANCE, color=mc.MUTED, ls="--", lw=1.2)
+    # Axes-fraction coords: an annotation anchored to the last bar's x lands
+    # outside the visible range once the bars are padded.
+    axes[0].text(0.985, mc.CHANCE + 0.015, "hasard (0.5)",
+                 transform=axes[0].get_yaxis_transform(which="grid"),
+                 ha="right", va="bottom", color=mc.INK_2, fontsize=9)
+    axes[0].set_ylim(0.0, 1.0)
+    mc.style_axes(axes[0], title="AUC (moyenne des plis ± écart-type)",
+                  ylabel="AUC")
+
+    axes[1].bar(x - 0.19, [r["accuracy_mean"] for r in rows], 0.38,
+                color=mc.SERIES[0], label="Exactitude")
+    axes[1].bar(x + 0.19, [r["base_rate"] for r in rows], 0.38,
+                color=mc.AXIS, label="Taux de base")
+    axes[1].set_ylim(0.0, 1.0)
+    axes[1].legend(frameon=False, fontsize=9, loc="upper left")
+    mc.style_axes(axes[1], title="Exactitude vs classe majoritaire",
+                  ylabel="Proportion")
+
+    for ax in axes:
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=15, ha="right", fontsize=9)
+
+    fig.suptitle(
+        "Quatre modèles : 2 cohortes × 2 jeux de variables",
+        color=mc.INK, fontsize=12, y=1.02,
+    )
+    return _save(fig, out_dir, "comparison_2x2.png")
+
+
 def _oof_predictions(X, y, groups, lstm_cfg, train_cfg, n_splits=5):
     oof = np.zeros(len(y))
     for fold_idx, (tr_idx, va_idx) in enumerate(GroupKFold(n_splits=n_splits).split(X, y, groups=groups)):
@@ -113,7 +173,18 @@ def _oof_predictions(X, y, groups, lstm_cfg, train_cfg, n_splits=5):
     return oof
 
 
-def main(out_dir: Path = Path("docs/figures")) -> list[Path]:
+def main(out_dir: Path = Path("docs/figures"), comparison_only: bool = False) -> list[Path]:
+    paths: list[Path] = []
+    if COMPARISON_JSON.exists():
+        results = json.loads(COMPARISON_JSON.read_text(encoding="utf-8"))
+        paths.append(figure_comparison_2x2(results, out_dir))
+    else:
+        print(f"  (skipping the 2x2 figure — {COMPARISON_JSON} absent)")
+    if comparison_only:
+        for p in paths:
+            print(f"  wrote {p}")
+        return paths
+
     ds = load()
     pre = preprocess(ds.signals, PipelineConfig(fs=ds.fs, mode="features"))
     X, y = pre.x, ds.labels.astype(np.float32)
@@ -125,7 +196,7 @@ def main(out_dir: Path = Path("docs/figures")) -> list[Path]:
     cv = cross_validate(X, y, groups=groups, lstm_cfg=lstm_cfg, train_cfg=train_cfg, n_splits=5)
     oof = _oof_predictions(X, y, groups, lstm_cfg, train_cfg, n_splits=5)
 
-    paths = [
+    paths += [
         figure_alpha_trajectory(ds.signals, ds.labels, ds.fs, out_dir),
         figure_cv_metrics(cv, out_dir),
         figure_diagnostics(y, oof, out_dir),
@@ -136,4 +207,10 @@ def main(out_dir: Path = Path("docs/figures")) -> list[Path]:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Regenerate the report figures.")
+    ap.add_argument("--comparison-only", action="store_true",
+                    help="only the 2x2 figure (reads JSON, retrains nothing)")
+    args = ap.parse_args()
+    main(comparison_only=args.comparison_only)

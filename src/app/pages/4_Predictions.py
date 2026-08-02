@@ -3,101 +3,153 @@ from __future__ import annotations
 from datetime import datetime
 from io import BytesIO
 
-import numpy as np
 import streamlit as st
 import torch
 
+from src.app.inference import build_model_input, eeg_sampling_rate
 from src.app.utils import (
-    MODEL_PATH,
     get_repository,
     has_trained_model,
     list_patient_ids,
+    model_choice,
+    model_path,
+    source_config,
+    source_selector,
 )
 from src.domain import ClinicianInterface, Prediction
 from src.domain.clinician import Role
 from src.models.train import load_model
-from src.preprocessing.pipeline import PipelineConfig, preprocess
+from src.models.train_tdbrain import load_contract
 
 st.set_page_config(page_title="Predictions", page_icon=":crystal_ball:", layout="wide")
 st.title("Prédiction de la réponse au traitement")
 
-if not has_trained_model():
-    st.error("Aucun modèle entraîné. Va sur la page **Training** d'abord.")
+source = source_selector()
+cfg = source_config(source)
+choix = model_choice(source)
+is_real = cfg.is_real
+unit = cfg.unit
+
+st.caption(f"**{cfg.label}** · modèle **{choix.label}**")
+
+if not has_trained_model(source):
+    st.error(
+        f"Aucun modèle entraîné pour **{cfg.label} · {choix.label}** "
+        f"(`{model_path(source)}` absent). Va sur la page **Training** d'abord."
+    )
     st.stop()
 
-repo = get_repository()
+repo = get_repository(source)
 patient_ids = list_patient_ids(repo)
 if not patient_ids:
-    st.info("Aucun patient en base.")
+    st.info(f"Aucun patient en base pour **{cfg.label}**.")
     st.stop()
 
 pid = st.selectbox("Patient", patient_ids)
 patient = repo.charger_patient(pid)
 
 if patient is None or not patient.sessions:
-    st.warning("Ce patient n'a pas de séances → impossible de prédire.")
+    st.warning(f"Ce patient n'a pas de {unit}s → impossible de prédire.")
+    st.stop()
+if choix.uses_signals and not all(s.signaux for s in patient.sessions):
+    st.warning(f"Certaines {unit}s n'ont pas de signal EEG → impossible de prédire.")
     st.stop()
 
 
 @st.cache_resource
 def _load_model(path_str: str):
-    return load_model(MODEL_PATH)
+    return load_model(model_path(source))
 
 
-model = _load_model(str(MODEL_PATH))
-fs = patient.sessions[0].signaux[0].sampling_rate_hz if patient.sessions[0].signaux else 256.0
+model = _load_model(str(model_path(source)))
+contract = load_contract(model_path(source))
+fs = eeg_sampling_rate(patient)
 
-if not all(s.signaux for s in patient.sessions):
-    st.warning("Certaines séances n'ont pas de signal EEG → impossible de prédire.")
+if choix.requires_contract and contract is None:
+    st.error(
+        f"Le modèle `{model_path(source)}` n'a pas de fichier de contrat "
+        f"(`{model_path(source).with_suffix('.json')}`). Ré-entraîne-le depuis "
+        "la page **Training** pour le régénérer."
+    )
+    st.stop()
+try:
+    x_input, fs = build_model_input(patient, is_real, contract)
+except (KeyError, ValueError) as exc:
+    st.error(f"Les données en base ne correspondent pas au modèle : {exc}")
     st.stop()
 
-window = patient.sessions[0].signaux[0].valeurs.shape[0]
-signals = np.stack(
-    [np.stack([sig.valeurs[:window] for sig in sess.signaux[:1]]).squeeze(0)
-     for sess in patient.sessions]
-)
-signals_3d = signals[np.newaxis, :, :]
-pre = preprocess(signals_3d.astype(np.float32), PipelineConfig(fs=fs, mode="features"))
+if x_input.shape[-1] != model.cfg.input_size:
+    st.error(
+        f"Incompatibilité de features : le modèle attend {model.cfg.input_size} "
+        f"entrées, les données en produisent {x_input.shape[-1]}."
+    )
+    st.stop()
 
-x_tensor = torch.as_tensor(pre.x, dtype=torch.float32)
+x_tensor = torch.as_tensor(x_input, dtype=torch.float32)
 with torch.no_grad():
     proba = float(model.predict_proba(x_tensor).item())
     tri_traj = model.predict_tri(x_tensor).squeeze(0).cpu().numpy().tolist()
 
 valeur = int(proba >= 0.5)
+model_version = model_path(source).stem
 prediction = Prediction(
     patient_id=patient.id,
     valeur=valeur,
     probabilite=proba,
     date=datetime.now(),
-    model_version="lstm_v1",
+    model_version=model_version,
     tri_trajectory=tri_traj,
 )
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Probabilité de réponse", f"{proba:.1%}")
 c2.metric("Classe prédite", "Répondeur" if valeur == 1 else "Non-répondeur")
-c3.metric("Sessions utilisées", len(patient.sessions))
+c3.metric(f"{unit.capitalize()}s utilisées", len(patient.sessions))
 
 st.write(f"**Interprétation** — {prediction.afficher()}")
 
-st.markdown("##### Indice thérapeutique (TRI) — trajectoire par séance")
-st.caption(
-    "TRIₜ = σ(W·hₜ + b) : estimation de la probabilité de réponse au fil des séances, "
-    "à mesure que le LSTM accumule les preuves (la dernière valeur = probabilité finale)."
-)
-st.line_chart(
-    {"TRI": tri_traj},
-    x=None,
-    height=240,
-)
+if is_real:
+    observed = patient.sessions[0]
+    if observed.score_pre is not None and observed.score_post is not None:
+        pct = (observed.score_pre - observed.score_post) / max(observed.score_pre, 1e-9)
+        st.info(
+            f"**Vérité terrain (BDI-II réel)** — {observed.score_pre:.0f} → "
+            f"{observed.score_post:.0f}, soit {pct:.0%} de réduction → "
+            f"**{'répondeur' if pct >= 0.5 else 'non-répondeur'}**."
+        )
 
-if patient.historique_clinique:
-    last_score = patient.historique_clinique[-1].score_depression
-    if last_score is not None:
-        ecart = prediction.analyser_ecart(last_score / 30.0)
-        st.markdown("##### Comparaison au score clinique observé")
-        st.json(ecart)
+st.markdown(f"##### Indice thérapeutique (TRI) — trajectoire par {unit}")
+if is_real:
+    st.caption(
+        "TRIₜ = σ(W·hₜ + b). ⚠️ Sur TDBRAIN les pas de temps sont des **époques d'un "
+        "unique enregistrement de repos**, pas des séances successives : cette courbe "
+        "montre l'accumulation de preuve du LSTM sur le signal, **pas** une évolution "
+        "clinique au fil du traitement."
+    )
+else:
+    st.caption(
+        "TRIₜ = σ(W·hₜ + b) : estimation de la probabilité de réponse au fil des séances, "
+        "à mesure que le LSTM accumule les preuves (la dernière valeur = probabilité finale)."
+    )
+st.line_chart({"TRI": tri_traj}, x=None, height=240)
+
+# Observed *response*, not observed severity. `analyser_ecart` expects a score in
+# [0, 1] where >= 0.5 means responder, so it must be fed the BDI-II reduction
+# fraction. Passing the post-treatment BDI (as `score/30`) was both the wrong
+# quantity and the wrong polarity — a low post-treatment score is a *good*
+# outcome, yet scored as a non-responder, so the page could show
+# "60% de réduction -> répondeur" above "observe: 0, concordance: false".
+first, last = patient.sessions[0], patient.sessions[-1]
+pre, post = first.score_pre, last.score_post
+if pre is not None and post is not None and pre > 0:
+    observed_response = (pre - post) / pre
+    ecart = prediction.analyser_ecart(observed_response)
+    st.markdown("##### Comparaison au score clinique observé")
+    st.caption(
+        f"Réponse observée = réduction BDI-II ({pre:.0f} → {post:.0f}) = "
+        f"{observed_response:.0%} ; seuil répondeur 50%."
+    )
+    st.json(ecart)
 
 st.divider()
 left, right = st.columns(2)

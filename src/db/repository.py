@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..domain.patient import DossierClinique, Patient
@@ -40,6 +40,7 @@ class Repository:
             row.nom = patient.nom
             row.age = patient.age
             row.diagnostic = patient.diagnostic
+            row.sexe = patient.sexe
             row.historique_json = json.dumps(
                 [
                     {"date": d.date.isoformat(), "note": d.note, "score_depression": d.score_depression}
@@ -70,6 +71,7 @@ class Repository:
                 nom=row.nom,
                 age=row.age,
                 diagnostic=row.diagnostic,
+                sexe=row.sexe,
                 historique_clinique=historique,
                 sessions=sessions,
             )
@@ -129,6 +131,13 @@ class Repository:
         row.score_post = sess.score_post
         row.parametres_json = json.dumps(asdict(sess.parametres))
         s.merge(row)
+
+        # Replace, don't append: without this a second save of the same session
+        # stacks a duplicate copy of every channel, which silently corrupts the
+        # montage shape the model is fed at inference. Sessions saved without
+        # signals leave the stored ones untouched (nothing to write).
+        if sess.signaux:
+            s.execute(delete(SignalRow).where(SignalRow.session_id == sess.id_session))
 
         for sig in sess.signaux:
             s.add(

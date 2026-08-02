@@ -19,8 +19,17 @@ class DossierClinique:
 class Patient:
     id: str
     nom: str
-    age: int
+    # Réel, pas entier : TDBRAIN publie des âges décimaux (49.66) et l'âge est le
+    # prédicteur le plus fort du projet. L'arrondir à la sauvegarde ferait prédire
+    # le modèle sur une valeur qu'il n'a jamais vue à l'entraînement. L'affichage
+    # arrondit ; le stockage non.
+    age: float
     diagnostic: str
+    # Encodé 0/1 comme dans les tables sources (TDBRAIN `gender`, simulateur
+    # apparié), et non "H"/"F" : c'est la valeur telle quelle qui alimente le bloc
+    # clinique du modèle, donc la stocker autrement obligerait à un recodage qui
+    # pourrait diverger de l'entraînement. `None` = non renseigné, jamais 0.
+    sexe: int | None = None
     historique_clinique: list[DossierClinique] = field(default_factory=list)
     sessions: list[SessionRTMS] = field(default_factory=list)
 
