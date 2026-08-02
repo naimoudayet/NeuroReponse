@@ -14,12 +14,12 @@ from src.app.utils import (
 )
 
 st.set_page_config(
-    page_title="rTMS + LSTM — Recherche App",
+    page_title="NeuroRéponse — rTMS + LSTM",
     page_icon=":brain:",
     layout="wide",
 )
 
-st.title("rTMS + LSTM — application de recherche")
+st.title("NeuroRéponse — prédiction de la réponse au rTMS")
 st.caption("PFE 2026 — Prédiction de la réponse au traitement rTMS à partir de signaux EEG.")
 
 source = source_selector()
@@ -73,7 +73,8 @@ else:
         f"2. **Sessions** — visualisation des {unit} et signaux EEG\n"
         "3. **Training** — entraînement du modèle LSTM (validation croisée patient-wise)\n"
         "4. **Predictions** — prédiction de la réponse + export PDF\n"
-        "5. **Suivi** — évolution patient · 6. **Boucle clinique** — séance par séance\n"
+        "5. **Suivi** — évolution du patient sur toutes ses séances\n"
+        "6. **Boucle clinique** — enregistrer, prédire, ajuster, recommencer\n"
         "7. **Comparaison** — les quatre modèles côte à côte"
     )
     if source is DataSource.SIMULE:

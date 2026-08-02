@@ -34,7 +34,7 @@ def build() -> Path:
     title_block(
         doc,
         "Guide d'installation",
-        "Application Recherche-App — rTMS + LSTM (EEG / ECG)",
+        "NeuroRéponse — application rTMS + LSTM (EEG / ECG)",
         "PFE 2026 — déploiement sur une nouvelle machine",
     )
 
@@ -124,8 +124,8 @@ def _etapes(doc: Document) -> None:
     heading(doc, "Étape 1 — Récupérer le projet", level=2)
     doc.add_paragraph("Depuis un dépôt Git :")
     code(doc, [
-        "git clone <url-du-depot> Recherche-App",
-        "cd Recherche-App",
+        "git clone <url-du-depot> NeuroReponse",
+        "cd NeuroReponse",
     ])
     doc.add_paragraph(
         "Ou bien copier le dossier du projet, puis ouvrir une console dans ce dossier. "

@@ -1,8 +1,11 @@
-# Recherche-App — rTMS + LSTM (PFE 2026)
+# NeuroRéponse — rTMS + LSTM (PFE 2026)
 
-Research prototype that predicts response to **rTMS** treatment in major depression
-from neurophysiological signals (EEG, ECG) and clinical variables, using an
-**LSTM** with patient-wise cross-validation.
+Research prototype that studies whether response to **rTMS** treatment in major
+depression can be predicted from neurophysiological signals (EEG, ECG) and
+clinical variables, using an **LSTM** with patient-wise cross-validation.
+
+> Repository: `NeuroReponse` (ASCII — GitHub mangles accents). The project is
+> written **NeuroRéponse** everywhere it is read by a human.
 
 It runs on **real data**: the public TDBRAIN rTMS-in-MDD cohort (132 treated
 patients, 26-channel EEG + ECG), alongside two simulated cohorts used as

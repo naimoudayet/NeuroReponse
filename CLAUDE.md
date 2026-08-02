@@ -1,5 +1,10 @@
 # CLAUDE.md — guidance for future sessions
 
+**The project is called NeuroRéponse** (repo `NeuroReponse`, ASCII because GitHub
+mangles accents). It was previously "Recherche-App", which is still the name of
+the working directory on disk — do not rename the folder to match, and do not
+"fix" paths that legitimately contain it.
+
 ## Project state
 
 **Phases 1–6 complete.** This is a finished PFE prototype: tests pass

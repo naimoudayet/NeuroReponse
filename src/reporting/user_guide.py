@@ -36,7 +36,7 @@ def build() -> Path:
     title_block(
         doc,
         "Guide d'utilisation",
-        "Application Recherche-App — rTMS + LSTM (EEG / ECG)",
+        "NeuroRéponse — application rTMS + LSTM (EEG / ECG)",
         "PFE 2026 — prise en main écran par écran",
     )
 
