@@ -33,3 +33,10 @@ data/models/*.json
 data/tdbrain/*
 !data/tdbrain/README.md
 !data/tdbrain/.gitkeep
+
+# Office lock/temp files (created while a .docx is open)
+~$*
+
+# Archives — snapshots, never the source of truth
+*.rar
+*.zip

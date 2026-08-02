@@ -186,6 +186,10 @@ def _etapes(doc: Document) -> None:
     code(doc, [
         "python -m src.data.simulator     # génère data/simulated/",
         "python -m src.data.seeder        # insère dans recherche.sqlite3",
+        "",
+        "# Cohorte simulée *appariée* sur TDBRAIN (132 patients, 26 canaux + ECG),",
+        "# nécessaire aux deux modèles simulés de la comparaison 2x2 :",
+        "python -m src.data.tdbrain_seeder --matched",
     ])
     note(
         doc,
@@ -298,10 +302,21 @@ def _tdbrain(doc: Document) -> None:
         "correspondent pas à ce contrat — ne pas supprimer ce fichier.",
     )
     doc.add_paragraph(
-        "Les deux cohortes utilisent des bases SQLite distinctes "
-        "(recherche.sqlite3 et recherche_tdbrain.sqlite3) et des modèles distincts : "
-        "patients simulés et réels ne se mélangent jamais."
+        "Les trois cohortes utilisent des bases SQLite distinctes "
+        "(recherche.sqlite3, recherche_sim_matched.sqlite3 et "
+        "recherche_tdbrain.sqlite3) et des modèles distincts : patients simulés et "
+        "réels ne se mélangent jamais."
     )
+    doc.add_paragraph(
+        "Pour entraîner les quatre modèles de la comparaison en une commande "
+        "(deux cohortes × deux jeux de variables) :"
+    )
+    code(doc, [
+        "python -m src.models.train_all `",
+        '    --root "data/tdbrain/TDBRAIN_Dataset_V3_1_Encr/TDBRAIN_Dataset_V3_1"',
+        "",
+        "python -m src.models.train_all --sim-only   # sans la cohorte réelle",
+    ])
 
 
 def _documentation(doc: Document) -> None:
@@ -342,9 +357,10 @@ def _artefacts(doc: Document) -> None:
         ["Code source, tests, notebooks", "Oui", "Fourni avec le projet"],
         ["data/simulated/*.npz, *.csv", "Non", "python -m src.data.simulator"],
         ["recherche.sqlite3", "Non", "Bouton d'accueil ou src.data.seeder"],
+        ["recherche_sim_matched.sqlite3", "Non", "tdbrain_seeder --matched"],
         ["recherche_tdbrain.sqlite3", "Non", "train_tdbrain --seed-db"],
         ["data/models/lstm_v1.pt", "Non", "Page Training, onglet « Modèle final »"],
-        ["data/models/tdbrain_response_v1.pt (+ .json)", "Non", "train_tdbrain"],
+        ["data/models/sim_*.pt, tdbrain_*.pt (+ .json)", "Non", "train_all"],
         ["data/tdbrain/ (données réelles)", "Non — interdit", "Téléchargement sous accord"],
         ["docs/screenshots/*.png", "Non", "python -m src.reporting.capture_screens"],
     ])

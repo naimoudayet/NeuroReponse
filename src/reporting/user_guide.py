@@ -70,6 +70,8 @@ def build() -> Path:
     doc.add_page_break()
     _boucle(doc)
     doc.add_page_break()
+    _comparaison(doc)
+    doc.add_page_break()
     _tdbrain(doc)
     _parcours(doc)
     _problemes(doc)
@@ -85,22 +87,34 @@ def build() -> Path:
 def _principes(doc: Document) -> None:
     heading(doc, "1. Principes à connaître avant de commencer")
 
-    heading(doc, "1.1 Deux cohortes, jamais mélangées", level=2)
+    heading(doc, "1.1 Trois cohortes, jamais mélangées", level=2)
     doc.add_paragraph(
-        "Toutes les pages possèdent un sélecteur « Source de données » dans la barre "
-        "latérale. Il commande l'intégralité de l'application : chaque cohorte a sa "
-        "propre base SQLite et son propre modèle entraîné. Un patient simulé et un "
-        "patient réel ne peuvent donc jamais se retrouver dans la même table ni dans "
-        "le même entraînement."
+        "La barre latérale porte deux sélecteurs, présents sur toutes les pages. "
+        "« Cohorte » choisit les patients, « Jeu de variables » choisit le modèle "
+        "appliqué à ces patients. Ensemble ils commandent l'intégralité de "
+        "l'application : chaque cohorte a sa propre base SQLite, chaque modèle son "
+        "propre fichier de poids. Un patient simulé et un patient réel ne peuvent "
+        "donc jamais se retrouver dans la même table ni dans le même entraînement."
     )
-    table(doc, ["", "Données simulées", "TDBRAIN (EEG réel)"], [
-        ["Origine", "Générateur du projet", "Cohorte publique Brainclinics"],
-        ["Patients", "100", "132 (MDD traités par rTMS)"],
-        ["Axe temporel", "10 séances de traitement", "Époques d'un unique enregistrement"],
-        ["Signal", "1 canal EEG", "26 canaux EEG + dérivation ECG"],
-        ["Features du modèle", "8", "130 (EEG) ou 135 (EEG + HRV)"],
-        ["Base", "recherche.sqlite3", "recherche_tdbrain.sqlite3"],
+    table(doc, ["", "Simulé — séquentiel", "Simulé — apparié", "TDBRAIN (réel)"], [
+        ["Origine", "Générateur du projet", "Générateur calibré sur TDBRAIN",
+         "Cohorte publique Brainclinics"],
+        ["Patients", "100", "132", "132 (MDD traités par rTMS)"],
+        ["Axe temporel", "10 séances de traitement", "8 époques d'un enregistrement",
+         "8 époques d'un enregistrement"],
+        ["Signal", "1 canal EEG", "26 canaux EEG + ECG", "26 canaux EEG + ECG"],
+        ["Modèles", "1 (8 features)", "2 : clinique (4) ou multimodal (139)",
+         "2 : clinique (4) ou multimodal (139)"],
+        ["Base", "recherche.sqlite3", "recherche_sim_matched.sqlite3",
+         "recherche_tdbrain.sqlite3"],
     ])
+    note(
+        doc,
+        "Les deux cohortes simulées ne sont pas la même. La séquentielle est la "
+        "seule où le modèle accumule l'information au fil des séances. L'appariée "
+        "reproduit la structure de TDBRAIN et sert de contrôle : elle est générée "
+        "sans effet neurophysiologique injecté.",
+    )
 
     heading(doc, "1.2 « Séance » ne veut pas dire la même chose", level=2)
     warning(
@@ -136,10 +150,12 @@ def _accueil(doc: Document) -> None:
         "cohorte simulée en un clic si la base est vide."
     )
     figure(doc, SHOTS / "01_home.png", "Page d'accueil, cohorte simulée")
-    bullet(doc, "Le sélecteur « Source de données » est en haut de la barre latérale ; "
-                "il reste actif quand on change de page.")
-    bullet(doc, "Le bouton « Initialiser avec les données simulées » génère le jeu de "
-                "données s'il manque, puis l'insère en base.")
+    bullet(doc, "Les sélecteurs « Cohorte » et « Jeu de variables » sont en haut de "
+                "la barre latérale ; ils restent actifs quand on change de page.")
+    bullet(doc, "La quatrième métrique rappelle le modèle actif : « Clinique seul (4) » "
+                "ou « Multimodal — clinique + EEG + ECG (139) ».")
+    bullet(doc, "Le bouton « Initialiser cette cohorte » génère le jeu de données s'il "
+                "manque, puis l'insère en base.")
     note(
         doc,
         "Ce bouton ne concerne que la cohorte simulée. La cohorte réelle se charge "
@@ -409,11 +425,46 @@ def _boucle(doc: Document) -> None:
     )
 
 
+def _comparaison(doc: Document) -> None:
+    heading(doc, "9. Page Comparaison")
+    doc.add_paragraph(
+        "Cette page met les quatre modèles côte à côte : deux cohortes (simulée "
+        "appariée, TDBRAIN réelle) croisées avec deux jeux de variables (clinique "
+        "seul, clinique + EEG + ECG). C'est le résultat central du projet, et la "
+        "page ne recalcule rien : elle lit le fichier produit par l'entraînement, "
+        "donc les chiffres affichés sont exactement ceux qui ont été mesurés."
+    )
+    figure(doc, SHOTS / "08_comparaison.png", "Les quatre modèles côte à côte")
+
+    heading(doc, "9.1 Comment lire les deux graphiques", level=2)
+    bullet(doc, "Le premier montre l'AUC de chaque modèle avec l'écart-type entre "
+                "les plis. La ligne pointillée est le hasard (0,5).")
+    bullet(doc, "Le second compare l'exactitude au taux de la classe majoritaire. "
+                "C'est le graphique qui compte : une exactitude égale à ce taux "
+                "signifie que le modèle prédit toujours la même classe.")
+
+    heading(doc, "9.2 Ce que la page conclut", level=2)
+    bullet(doc, "Aucune variante ne dépasse son taux de base. Le modèle répond "
+                "« répondeur » pour presque tous les patients.")
+    bullet(doc, "Le modèle clinique (4 variables) fait aussi bien, voire mieux, que "
+                "le multimodal (139) : ajouter des colonnes non informatives dilue "
+                "les quelques-unes qui le sont, sur seulement 132 patients.")
+    bullet(doc, "Les écarts entre variantes sont de l'ordre de l'écart-type entre "
+                "plis : les classer par AUC reviendrait à commenter du bruit.")
+    note(
+        doc,
+        "Un avertissement s'affiche automatiquement lorsque aucune variante ne "
+        "dépasse son taux de base. Il n'est pas décoratif : c'est le résultat, et "
+        "il est négatif. La démonstration porte sur la chaîne de traitement "
+        "complète, pas sur une performance clinique.",
+    )
+
+
 def _tdbrain(doc: Document) -> None:
-    heading(doc, "9. Particularités de la cohorte réelle")
+    heading(doc, "10. Particularités de la cohorte réelle")
     figure(doc, SHOTS / "td_01_home.png", "Accueil avec la cohorte TDBRAIN sélectionnée")
 
-    heading(doc, "9.1 Ce qui est réel, ce qui ne l'est pas", level=2)
+    heading(doc, "10.1 Ce qui est réel, ce qui ne l'est pas", level=2)
     table(doc, ["Élément", "Statut"], [
         ["EEG 26 canaux, dérivation ECG", "Réel (mesuré)"],
         ["Scores BDI-II avant / après", "Réels"],
@@ -424,7 +475,7 @@ def _tdbrain(doc: Document) -> None:
         ["« Époques »", "Fenêtres d'un enregistrement unique, pas des séances"],
     ])
 
-    heading(doc, "9.2 Le résultat obtenu, et comment le présenter", level=2)
+    heading(doc, "10.2 Le résultat obtenu, et comment le présenter", level=2)
     doc.add_paragraph(
         "Sur la cohorte réelle, la prédiction de la réponse au rTMS se situe au "
         "niveau du hasard : l'AUC mesurée se situe entre 0,47 et 0,52 selon les "
@@ -448,7 +499,7 @@ def _tdbrain(doc: Document) -> None:
 
 
 def _parcours(doc: Document) -> None:
-    heading(doc, "10. Parcours conseillé pour une démonstration")
+    heading(doc, "11. Parcours conseillé pour une démonstration")
     step(doc, 1, "Accueil : vérifier la source sélectionnée et l'état de la base.")
     step(doc, 2, "Patients : ouvrir un patient, montrer son historique clinique.")
     step(doc, 3, "Sessions : montrer les paramètres rTMS, un canal EEG, puis — sur "
@@ -467,7 +518,7 @@ def _parcours(doc: Document) -> None:
 
 
 def _problemes(doc: Document) -> None:
-    heading(doc, "11. Messages fréquents")
+    heading(doc, "12. Messages fréquents")
     table(doc, ["Message affiché", "Signification", "Que faire"], [
         ["Aucun patient en base",
          "La cohorte n'a pas été chargée",

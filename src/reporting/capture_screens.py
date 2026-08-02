@@ -24,6 +24,8 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
+from src.app.utils import SOURCES
+
 BASE_URL = "http://localhost:8765"
 OUT_DIR = Path("docs/screenshots")
 VIEWPORT = {"width": 1400, "height": 900}
@@ -36,12 +38,16 @@ PAGES: list[tuple[str, str]] = [
     ("Predictions", "predictions"),
     ("Suivi", "suivi"),
     ("Boucle clinique", "boucle"),
+    ("Comparaison", "comparaison"),
 ]
 
-SOURCE_LABELS = {
-    "simule": "Données simulées",
-    "tdbrain": "TDBRAIN (EEG réel)",
-}
+# Read from the app's own catalogue rather than restated here: these labels are
+# clicked by exact text, so a wording change in the sidebar would otherwise make
+# the capture silently screenshot the wrong cohort.
+SOURCE_LABELS = {s.value: cfg.label for s, cfg in SOURCES.items()}
+
+# Which cohort gets which screenshot prefix in the guide.
+PREFIXES = {"simule_seq": "", "simule": "sim_", "tdbrain": "td_"}
 
 
 def _wait_for_app(page: Page, max_wait: float = 60.0) -> None:
@@ -151,15 +157,15 @@ def capture(page: Page, source: str, prefix: str, train: bool = True) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Screenshot the Streamlit app.")
-    ap.add_argument("--source", choices=("simule", "tdbrain", "both"), default="both")
+    ap.add_argument("--source", choices=(*SOURCE_LABELS, "both"), default="both")
     ap.add_argument("--no-train", action="store_true",
                     help="skip running cross-validation before the Training shot")
     args = ap.parse_args()
 
     targets = (
-        [("simule", ""), ("tdbrain", "td_")]
+        [(k, PREFIXES[k]) for k in SOURCE_LABELS]
         if args.source == "both"
-        else [(args.source, "" if args.source == "simule" else "td_")]
+        else [(args.source, PREFIXES[args.source])]
     )
 
     with sync_playwright() as p:
