@@ -193,8 +193,25 @@ Facts worth not re-deriving:
 - **Language**: French domain terms (`ajouter_dossier`, `frequence_hz`,
   `localisation`) because the UML diagram uses French. The jury looks for these.
   Python identifiers use snake_case (no accents).
+- **Supported Python is 3.11–3.14, and `requirements.txt` enforces it.** The
+  first two lines are unsatisfiable requirements guarded by `python_version`
+  markers, so an unsupported interpreter fails immediately with a readable name
+  (`NeuroReponse-requires-Python-3.11-to-3.14-yours-is-too-new`). Without them,
+  Python 3.15 gets three packages in and dies inside a Meson source build
+  ("Could not find vswhere.exe") because pandas, torch, scikit-learn, matplotlib
+  and pyarrow ship **no cp315 wheels** (verified against PyPI, 2026-08). numpy,
+  scipy and pillow do — which is why the failure looks like a pandas bug and
+  isn't. Do not "fix" it by installing Visual Studio Build Tools: torch cannot
+  realistically be built from source. Raise the bound when upstream ships 3.15
+  wheels; `tests/test_requirements.py` keeps the guard first in the file (pip
+  collects in file order, so position is what makes it short-circuit) and keeps
+  the README's stated range in sync.
+- **Every dependency carries an upper bound**, one major above the tested
+  version — enforced by `test_every_dependency_has_an_upper_bound`. pandas 3.0
+  landed silently under the old `pandas>=2.1`; the next major would too.
 - **ML backend**: **PyTorch**, not TensorFlow — TF doesn't ship wheels for
-  Python 3.14. Architecture and metrics are identical to what the doc describes.
+  Python 3.14 (cp310–cp313 only). Architecture and metrics are identical to what
+  the doc describes.
 - **Persistence**: SQLAlchemy 2.0 ORM in `src/db/schema.py`; all DB access goes
   through `Repository` (= the `BaseDeDonnées` UML class).
 - **Cross-validation**: always patient-wise (`GroupKFold` with patient id as
@@ -204,7 +221,7 @@ Facts worth not re-deriving:
 
 ## Testing
 
-- `pytest tests/ -q` should always pass (201 tests).
+- `pytest tests/ -q` should always pass (218 tests).
 - `tests/test_app_pages.py` runs every Streamlit page through `AppTest`. Pages are
   scripts nothing imports, so a rename in `utils` is otherwise invisible until
   someone clicks the page. It **skips** when a cohort's database is absent, so it

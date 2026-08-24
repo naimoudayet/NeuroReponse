@@ -93,7 +93,7 @@ trains nothing that is saved — the four checkpoints stay untouched.
 | — | **Real-data track**: TDBRAIN loader/seeder, ECG/HRV, clinical loop, follow-up | done |
 | — | **2×2 comparison**: 4 models, matched simulator, comparison page in the app | done |
 
-**201 tests passing**, lint clean (`ruff check src/`), eight executable
+**218 tests passing**, lint clean (`ruff check src/`), eight executable
 notebooks, seven-page Streamlit app, generated DOCX guides.
 
 ## Three cohorts, three databases
@@ -114,7 +114,12 @@ structure and is what the 2×2's simulated variants were fit on.
 
 ## Quick start
 
+> **Python 3.11 – 3.14, 64-bit.** Not 3.15 or newer — see [Stack](#stack).
+> `requirements.txt` refuses to install on an unsupported interpreter rather
+> than failing halfway through a source build.
+
 ```powershell
+python -V                                    # must report 3.11.x - 3.14.x
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
@@ -122,7 +127,7 @@ pip install -r requirements.txt
 # torch wheel comes from a separate index:
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-python -m pytest -q                          # 201 tests
+python -m pytest -q                          # 218 tests
 python -m src.data.simulator                 # generate the sequential simulated dataset
 python -m src.data.seeder                    # load it into SQLite
 python -m src.data.tdbrain_seeder --matched  # the matched simulated cohort
@@ -186,7 +191,7 @@ src/
   app/            # Streamlit app (7 pages) + shared inference
   reporting/      # figures, notebook builder, DOCX guides, clinical loop logic
 notebooks/        # 01-04 plus one generated report per variant
-tests/            # pytest — 201 tests
+tests/            # pytest — 218 tests
 docs/             # tdbrain.md, figures/, generated guides
 ```
 
@@ -206,7 +211,11 @@ docs/             # tdbrain.md, figures/, generated guides
 
 ## Stack
 
-- **Python 3.11+** (tested on 3.14)
+- **Python 3.11 – 3.14, 64-bit** (developed and tested on 3.14). **Not 3.15+**:
+  pandas, torch, scikit-learn, matplotlib and pyarrow publish no cp315 wheels, so
+  pip falls back to compiling them from source and dies in Meson/MSVC. The first
+  line of `requirements.txt` is a deliberate guard that fails immediately with a
+  readable message instead. Raise its bound once those projects ship 3.15 wheels.
 - **PyTorch (CPU)** — TensorFlow ships no Python 3.14 wheels; the design doc accepts either
 - **SQLAlchemy 2.0** + **SQLite** for persistence
 - **MNE** for reading BioSemi BDF recordings

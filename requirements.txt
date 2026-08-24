@@ -1,44 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Supported Python: 3.11 – 3.14 (64-bit).  Check with:  python -V
+#
+# The two lines below are deliberately impossible to satisfy outside that range.
+# They exist so that an unsupported interpreter fails on the FIRST line with a
+# readable message, instead of failing three packages later inside a Meson/MSVC
+# source build ("Could not find vswhere.exe").
+#
+# Why 3.15+ is refused: as of 2026-08, pandas, torch, scikit-learn, matplotlib
+# and pyarrow (a Streamlit dependency) publish NO cp315 wheels. pip therefore
+# falls back to compiling them from source, which needs Visual Studio Build
+# Tools and, for torch, is not realistically possible at all.
+# When those projects ship 3.15 wheels, raise the bound on the first line.
+NeuroReponse-requires-Python-3.11-to-3.14-yours-is-too-new == 0 ; python_version >= "3.15"
+NeuroReponse-requires-Python-3.11-or-newer == 0 ; python_version < "3.11"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Upper bounds are one major above the versions this project is actually tested
+# on, so `pip install -r requirements.txt` cannot silently drift into an
+# untested major release. Loosen deliberately, not by accident.
+
 # Core scientific
-# The <2.2 cap was stale: this project runs and passes its full suite on numpy 2.4.
-numpy>=1.26
-scipy>=1.11
-pandas>=2.1
+# The <2.2 cap on numpy was stale: this project runs and passes its full suite
+# on numpy 2.4.
+numpy>=1.26,<3
+scipy>=1.11,<2
+pandas>=2.1,<4
 
 # ML
-scikit-learn>=1.4
-# Python 3.14 dropped TensorFlow support; PyTorch CPU works.
-# Install via: pip install torch --index-url https://download.pytorch.org/whl/cpu
-torch>=2.4
+scikit-learn>=1.4,<2
+# TensorFlow is not used: it ships no wheels for Python 3.14 (cp310-cp313 only).
+# On Windows the default PyPI wheel is already CPU-only. For an explicit CPU
+# build: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.4,<3
 
 # Real EEG (TDBRAIN loader): mne reads the BioSemi BDF recordings.
 # mne's reader is self-contained; edfio is only needed to *write* BDF
 # (synthetic test fixtures / mne export), not to read real data.
-mne>=1.6
-edfio>=0.4
+mne>=1.6,<2
+edfio>=0.4,<1
 
 # Persistence
-SQLAlchemy>=2.0
+SQLAlchemy>=2.0,<3
 
 # UI / viz
-streamlit>=1.32
-plotly>=5.20
-matplotlib>=3.8
+streamlit>=1.32,<2
+plotly>=5.20,<7
+matplotlib>=3.8,<4
 
 # Notebooks
-jupyterlab>=4.0
-ipykernel>=6.29
+jupyterlab>=4.0,<5
+ipykernel>=6.29,<8
 
 # Reports & documentation
 # reportlab: PDF export from the Predictions page (needed at runtime).
 # python-docx + playwright: only for regenerating docs/Guide_*.docx and the
 # screenshots it embeds (src/reporting/user_guide.py, capture_screens.py).
 # Playwright also needs its browser binary once: python -m playwright install chromium
-reportlab>=4.1
-python-docx>=1.1
-playwright>=1.40
+reportlab>=4.1,<5
+python-docx>=1.1,<2
+playwright>=1.40,<2
 
 # Dev tooling
-pytest>=8.0
-pytest-cov>=4.1
-ruff>=0.4
-mypy>=1.9
+pytest>=8.0,<10
+pytest-cov>=4.1,<8
+ruff>=0.4,<1
+mypy>=1.9,<3

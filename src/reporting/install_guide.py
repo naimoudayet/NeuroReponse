@@ -89,10 +89,27 @@ def _prerequis(doc: Document) -> None:
     heading(doc, "2. Prérequis")
 
     heading(doc, "2.1 Logiciels", level=2)
-    bullet(doc, "Python 3.11 ou plus récent — développé et testé sur Python 3.14.")
+    bullet(
+        doc,
+        "Python 3.11 à 3.14 en 64 bits — développé et testé sur Python 3.14. "
+        "Ne pas prendre Python 3.15 ou plus récent : ces versions ne sont pas "
+        "encore utilisables (voir la remarque ci-dessous).",
+    )
     bullet(doc, "pip (fourni avec Python) et le module venv.")
     bullet(doc, "Git, si le projet est récupéré depuis un dépôt.")
     bullet(doc, "Un navigateur web récent : l'interface Streamlit s'ouvre dedans.")
+    note(
+        doc,
+        "Pourquoi pas la toute dernière version de Python ? Les bibliothèques "
+        "scientifiques compilées (pandas, torch, scikit-learn, matplotlib) ne "
+        "publient un paquet précompilé qu'avec plusieurs mois de retard sur une "
+        "nouvelle version de Python. Sur Python 3.15, pip ne trouve aucun paquet "
+        "prêt à l'emploi et tente de compiler ces bibliothèques depuis les "
+        "sources, ce qui exige Visual Studio Build Tools et échoue. "
+        "requirements.txt bloque volontairement l'installation dans ce cas, avec "
+        "un message explicite, plutôt que de laisser l'erreur survenir au milieu "
+        "de l'installation.",
+    )
     note(
         doc,
         "TensorFlow n'est pas utilisé : il ne fournit pas de paquet pour Python 3.14. "
@@ -146,12 +163,15 @@ def _etapes(doc: Document) -> None:
     )
 
     heading(doc, "Étape 3 — Installer les dépendances", level=2)
-    step(doc, 1, "Mettre pip à jour, puis installer les dépendances du projet :")
+    step(doc, 1, "Vérifier d'abord la version de Python de l'environnement virtuel. "
+                 "Elle doit être comprise entre 3.11 et 3.14 :")
+    code(doc, ["python -V"])
+    step(doc, 2, "Mettre pip à jour, puis installer les dépendances du projet :")
     code(doc, [
         "python -m pip install --upgrade pip",
         "pip install -r requirements.txt",
     ])
-    step(doc, 2, "Si PyTorch n'est pas disponible pour votre plateforme via la "
+    step(doc, 3, "Si PyTorch n'est pas disponible pour votre plateforme via la "
                  "commande précédente, l'installer depuis l'index CPU officiel :")
     code(doc, ["pip install torch --index-url https://download.pytorch.org/whl/cpu"])
     note(
@@ -369,6 +389,15 @@ def _artefacts(doc: Document) -> None:
 def _depannage(doc: Document) -> None:
     heading(doc, "7. Dépannage")
     table(doc, ["Symptôme", "Cause probable", "Solution"], [
+        ["No matching distribution found for NeuroReponse-requires-Python-…",
+         "Version de Python non supportée (3.15+, ou antérieure à 3.11)",
+         "Installer Python 3.14 en 64 bits, recréer le .venv avec, "
+         "puis relancer pip install -r requirements.txt"],
+        ["metadata-generation-failed / meson / « Could not find vswhere.exe » "
+         "sur pandas, torch ou scikit-learn",
+         "Python trop récent : aucun paquet précompilé, pip compile les sources",
+         "Même solution : repasser sur Python 3.11–3.14 (voir section 2.1). "
+         "Installer Visual Studio Build Tools ne résout pas le cas de torch."],
         ["« streamlit » : commande introuvable",
          "L'environnement virtuel n'est pas activé, ou PATH incomplet",
          "Activer .venv, ou lancer python -m streamlit run src/app/main.py"],
