@@ -252,3 +252,52 @@ def build_model_input(patient, is_real: bool, contract=None) -> tuple[np.ndarray
     # exist just to report a sampling rate.
     fs = eeg_sampling_rate(patient) if contract.uses_signals else float(contract.fs)
     return rebuild_tdbrain_input(patient, contract, fs), fs
+
+
+def responder_scale(
+    model, x: np.ndarray, is_regression: bool, bdi_ref: float | None
+) -> tuple[list[float], list[float]]:
+    """Per-timestep output as ``(scale_0_1, raw)`` — one conversion, used everywhere.
+
+    Two heads produce two different quantities, but every downstream consumer
+    (:func:`src.reporting.suivi.analyser_suivi`, the clinical loop's
+    ``recommandation``, the 50 % threshold line on both charts) is written
+    against a value on [0, 1] compared to 0.5:
+
+    * classification — the TRI is already that; ``raw`` is the same series.
+    * regression — the head emits BDI-II *points*, so the scaled series is
+      ``points / bdi_ref``, the predicted fraction of the patient's own baseline
+      recovered. ``raw`` keeps the points, because that is what a clinician reads.
+
+    Dividing by the patient's own baseline is what makes the 50 % criterion mean
+    the same thing for both heads: a 12-point gain is a response from a BDI of 20
+    and is not from a BDI of 40.
+
+    Living here rather than in the two pages is the same rule as
+    :func:`build_model_input` — Suivi and the loop must not disagree about what
+    the same model said about the same patient.
+    """
+    import torch
+
+    t = torch.as_tensor(x, dtype=torch.float32)
+    if not is_regression:
+        tri = model.predict_tri(t).squeeze(0).cpu().numpy().tolist()
+        return tri, tri
+
+    if bdi_ref is None or bdi_ref <= 0:
+        raise ValueError(
+            "BDI-II de référence absent ou nul : impossible d'exprimer la "
+            "réduction prédite en proportion du score initial"
+        )
+    raw = model.predict_value_sequence(t).squeeze(0).cpu().numpy().tolist()
+    return [float(v) / float(bdi_ref) for v in raw], [float(v) for v in raw]
+
+
+def baseline_bdi(patient) -> float | None:
+    """The patient's reference BDI-II, from the first session or the record."""
+    if patient.sessions and patient.sessions[0].score_pre is not None:
+        return float(patient.sessions[0].score_pre)
+    for dossier in patient.historique_clinique:
+        if dossier.score_depression is not None:
+            return float(dossier.score_depression)
+    return None

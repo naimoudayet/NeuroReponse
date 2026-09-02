@@ -56,6 +56,7 @@ def build() -> Path:
 
     doc.add_page_break()
     _principes(doc)
+    _objectifs(doc)
     doc.add_page_break()
     _accueil(doc)
     _patients(doc)
@@ -75,6 +76,8 @@ def build() -> Path:
     _tdbrain(doc)
     _parcours(doc)
     _problemes(doc)
+    doc.add_page_break()
+    _annexe_equations(doc)
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     doc.save(OUTPUT)
@@ -84,17 +87,60 @@ def build() -> Path:
 # --------------------------------------------------------------------------- #
 
 
+def _objectifs(doc: Document) -> None:
+    """The two heads, and the trap that comes with the continuous one."""
+    heading(doc, "1.4 Deux objectifs : réponse binaire ou réduction BDI-II", level=2)
+    doc.add_paragraph(
+        "Le sélecteur « Objectif » commande ce que le modèle prédit, et donc ce "
+        "que les pages affichent."
+    )
+    table(doc, ["", "Réponse binaire", "Réduction BDI-II (ΔBDI)"], [
+        ["Cible", "Répondeur : ≥ 50 % de réduction",
+         "Nombre de points BDI-II récupérés"],
+        ["Sortie affichée", "Probabilité (ex. 63 %)",
+         "Points récupérés (ex. +14,0 pts) et part du score initial"],
+        ["Protocoles", "Poolés (un seul modèle)",
+         "Séparés (un modèle par protocole)"],
+        ["Score", "AUC, exactitude, F1",
+         "Corrélation de Pearson, test de permutation"],
+        ["Origine", "Conception initiale du projet",
+         "Méthode de l'étude de référence (PMC12981298)"],
+    ])
+    note(
+        doc,
+        "Piège à connaître avant de lire un résultat de régression : la réduction "
+        "en points est mécaniquement liée à la sévérité initiale — on ne peut pas "
+        "récupérer 40 points en partant d'un score de 20. Sur le protocole 1, le "
+        "BDI-II d'admission atteint à lui seul une corrélation de 0,500 avec la "
+        "cible, soit davantage que le 0,401 annoncé par l'étude de référence à "
+        "partir de l'EEG. C'est pourquoi chaque modèle multimodal est présenté à "
+        "côté de son modèle « clinique seul » : seule cette comparaison dit si "
+        "l'EEG a apporté quoi que ce soit.",
+    )
+
+
 def _principes(doc: Document) -> None:
     heading(doc, "1. Principes à connaître avant de commencer")
 
     heading(doc, "1.1 Trois cohortes, jamais mélangées", level=2)
     doc.add_paragraph(
-        "La barre latérale porte deux sélecteurs, présents sur toutes les pages. "
-        "« Cohorte » choisit les patients, « Jeu de variables » choisit le modèle "
-        "appliqué à ces patients. Ensemble ils commandent l'intégralité de "
-        "l'application : chaque cohorte a sa propre base SQLite, chaque modèle son "
-        "propre fichier de poids. Un patient simulé et un patient réel ne peuvent "
-        "donc jamais se retrouver dans la même table ni dans le même entraînement."
+        "La barre latérale porte jusqu'à quatre sélecteurs, présents sur toutes "
+        "les pages. « Cohorte » choisit les patients ; « Objectif » choisit ce que "
+        "le modèle prédit ; « Protocole rTMS » choisit le bras de traitement ; "
+        "« Jeu de variables » choisit les entrées du modèle. Ensemble ils "
+        "commandent l'intégralité de l'application : chaque cohorte a sa propre "
+        "base SQLite, chaque modèle son propre fichier de poids. Un patient simulé "
+        "et un patient réel ne peuvent donc jamais se retrouver dans la même table "
+        "ni dans le même entraînement."
+    )
+    doc.add_paragraph(
+        "Les deux derniers sélecteurs n'apparaissent que lorsqu'ils ont un sens. "
+        "« Objectif » est masqué pour la cohorte séquentielle, qui n'a pas de "
+        "modèle de régression. « Protocole rTMS » n'apparaît que pour l'objectif "
+        "« Réduction BDI-II » : seuls ces modèles-là sont ajustés protocole par "
+        "protocole, et sélectionner un bras filtre aussi la liste des patients — "
+        "un modèle ajusté sur le protocole 1 ne doit jamais prédire sur un patient "
+        "traité selon le protocole 2, qui a reçu un autre traitement."
     )
     table(doc, ["", "Simulé — séquentiel", "Simulé — apparié", "TDBRAIN (réel)"], [
         ["Origine", "Générateur du projet", "Générateur calibré sur TDBRAIN",
@@ -103,8 +149,9 @@ def _principes(doc: Document) -> None:
         ["Axe temporel", "10 séances de traitement", "8 époques d'un enregistrement",
          "8 époques d'un enregistrement"],
         ["Signal", "1 canal EEG", "26 canaux EEG + ECG", "26 canaux EEG + ECG"],
-        ["Modèles", "1 (8 features)", "2 : clinique (4) ou multimodal (139)",
-         "2 : clinique (4) ou multimodal (139)"],
+        ["Modèles", "1 (8 features)",
+         "2 binaires + 5 régressions (ΔBDI, par protocole)",
+         "2 binaires + 5 régressions (ΔBDI, par protocole)"],
         ["Base", "recherche.sqlite3", "recherche_sim_matched.sqlite3",
          "recherche_tdbrain.sqlite3"],
     ])
@@ -150,8 +197,12 @@ def _accueil(doc: Document) -> None:
         "cohorte simulée en un clic si la base est vide."
     )
     figure(doc, SHOTS / "01_home.png", "Page d'accueil, cohorte simulée")
-    bullet(doc, "Les sélecteurs « Cohorte » et « Jeu de variables » sont en haut de "
-                "la barre latérale ; ils restent actifs quand on change de page.")
+    bullet(doc, "Les sélecteurs (« Cohorte », « Objectif », « Protocole rTMS », "
+                "« Jeu de variables ») sont en haut de la barre latérale ; ils "
+                "restent actifs quand on change de page.")
+    bullet(doc, "Quand un protocole est sélectionné, le compteur de patients "
+                "n'affiche que ce bras (44 pour le protocole 1, 88 pour le "
+                "protocole 2).")
     bullet(doc, "La quatrième métrique rappelle le modèle actif : « Clinique seul (4) » "
                 "ou « Multimodal — clinique + EEG + ECG (139) ».")
     bullet(doc, "Le bouton « Initialiser cette cohorte » génère le jeu de données s'il "
@@ -559,6 +610,196 @@ def _problemes(doc: Document) -> None:
         "python -m src.reporting.capture_screens",
         "python -m src.reporting.user_guide",
     ])
+
+
+def _annexe_equations(doc: Document) -> None:
+    """The proposed mathematical framework, each block with its measured status.
+
+    These equations arrived as a hand-edited copy of this very document
+    (``new_docs/Guide_Utilisateur_perfectionne_equations_RES0_AR1-2.docx``). That
+    copy would be destroyed by the next ``python -m src.reporting.user_guide``,
+    exactly as an edit to a generated notebook is destroyed by the next
+    ``build_notebooks`` run — so they live in the builder instead.
+
+    Every block carries a **status**, and that is the substance of the annex
+    rather than decoration. An equation printed without saying whether it was
+    implemented, approximated or found to be uncomputable on this cohort reads as
+    a description of the software, which for most of these would be false.
+    """
+    heading(doc, "Annexe A — Cadre mathématique proposé et ce qui en a été testé")
+    doc.add_paragraph(
+        "Cette annexe rassemble le cadre mathématique proposé pour le projet "
+        "(documents HYPO1–HYPO4 et RES0_AR1). Chaque bloc est accompagné de son "
+        "statut réel : implémenté et mesuré, approché par une variable de "
+        "substitution, ou non calculable sur TDBRAIN. Les équations décrivent une "
+        "architecture visée ; elles ne doivent pas être lues comme des résultats "
+        "expérimentaux."
+    )
+    warning(
+        doc,
+        "Le résultat mesuré est négatif, et il figure ici en entier : aucune des "
+        "familles de variables issues de ces équations n'améliore la prédiction de "
+        "la réponse à la rTMS. Ce qu'elles apportent est une réfutation étayée, "
+        "pas une performance.",
+    )
+
+    heading(doc, "A.1 État latent et observation multimodale", level=2)
+    _equation(doc, "X(t) = [E(t), I(t), A(t), C(t)]ᵀ",
+              "État latent : activité excitatrice, inhibitrice, état autonome "
+              "(ECG) et état cognitif (ERP).")
+    _equation(doc, "Y(t) = H X(t) + ε(t)",
+              "Observation multimodale : l'EEG et l'ECG sont des mesures "
+              "partielles et bruitées de l'état neurophysiologique.")
+    _equation(doc, "dX(t) = f(X(t), U(t)) dt + Σ dW(t)",
+              "Dynamique cérébrale stochastique ; U(t) = paramètres rTMS.")
+    _statut(
+        doc, "Partiellement implémenté.",
+        "A(t) existe réellement : cinq métriques de variabilité cardiaque "
+        "extraites de la dérivation ECG. C(t) est **impossible** sur cette "
+        "cohorte — inventaire mesuré : les 190 sujets ayant un protocole rTMS "
+        "n'ont que des enregistrements de repos, et les 129 sujets avec tâche "
+        "oddball sont tous des témoins sains. Aucun patient traité n'a d'ERP.",
+    )
+
+    heading(doc, "A.2 Wilson–Cowan : populations excitatrice et inhibitrice", level=2)
+    _equation(doc, "dE/dt = −E/τE + S(wEE·E − wEI·I + P)", "Population excitatrice.")
+    _equation(doc, "dI/dt = −I/τI + S(wIE·E − wII·I + QI)", "Population inhibitrice.")
+    _statut(
+        doc, "Approché par une variable de substitution.",
+        "Ajuster les paramètres de Wilson–Cowan sur un seul enregistrement de "
+        "repos est un problème d'estimation non identifiable. La pente 1/f du "
+        "spectre est un marqueur reconnu du **rapport** E/I (Gao, Peterson & "
+        "Voytek, 2017), et c'est ce rapport qu'utilisent les équations. Elle est "
+        "calculée par canal (`aperiodic_exponent`), moyenne mesurée 1,35 — valeur "
+        "canonique pour un EEG.",
+    )
+
+    heading(doc, "A.3 Synchronisation de réseau : Kuramoto, PLV, cohérence", level=2)
+    _equation(doc, "dθᵢ/dt = ωᵢ + Σⱼ Kᵢⱼ·sin(θⱼ − θᵢ)",
+              "Couplage de phase entre populations neuronales.")
+    _equation(doc, "R(t) = |(1/N)·Σⱼ exp(i·θⱼ(t))|",
+              "Paramètre d'ordre de Kuramoto : synchronisation globale. Son "
+              "écart-type temporel mesure la métastabilité.")
+    _equation(doc, "PLV = |(1/N)·Σₖ exp(i·Δφₖ)|",
+              "Verrouillage de phase entre deux canaux.")
+    _equation(doc, "Cxy(f) = |Pxy(f)|² / (Pxx(f)·Pyy(f))",
+              "Cohérence spectrale.")
+    _statut(
+        doc, "Implémenté et mesuré — c'est l'apport principal.",
+        "Ces trois familles sont ce que l'étude de référence ne calcule pas : une "
+        "puissance de bande est aveugle à la phase, donc aucune quantité de "
+        "puissances ne peut exprimer un couplage. Le bloc « synchronisation » "
+        "(30 variables : PLV moyen, PLV frontal, PLV interhémisphérique, "
+        "cohérence, ordre de Kuramoto et métastabilité, sur cinq bandes) est "
+        "calculé pour chaque époque de chaque patient.",
+    )
+
+    heading(doc, "A.4 Couche électromagnétique (Biot–Savart, Maxwell–Faraday)", level=2)
+    _equation(doc, "B(r,t) = (μ₀/4π)·∮ I(t)·[dℓ × (r − r′)] / |r − r′|³",
+              "Champ magnétique de la bobine rTMS.")
+    _equation(doc, "∇ × E(r,t) = − ∂B(r,t)/∂t", "Champ électrique cortical induit.")
+    _equation(doc, "J(r,t) = σ(r)·E(r,t)", "Densité de courant dans les tissus.")
+    _statut(
+        doc, "Non calculable, et démontré comme tel.",
+        "TDBRAIN ne publie ni l'intensité du stimulateur, ni la géométrie de la "
+        "bobine, ni de conductivité tissulaire (aucune IRM). Toute grandeur "
+        "dérivable se réduit donc à une fonction du numéro de protocole, qui ne "
+        "prend que deux valeurs. Vérification par le rang de la matrice : ajouter "
+        "trois colonnes physiques à [1 | protocole] laisse le rang à 2. Le "
+        "« modèle E » du protocole HYPO4 n'est pas seulement non implémenté, il "
+        "est vide sur cette cohorte.",
+    )
+
+    heading(doc, "A.5 Estimation d'état (Kalman) et contrôle optimal (MPC)", level=2)
+    _equation(doc, "X̂ₜ|ₜ = X̂ₜ|ₜ₋₁ + Kₜ·(Yₜ − H·X̂ₜ|ₜ₋₁)",
+              "Correction de l'état estimé par l'innovation EEG/ECG.")
+    _equation(doc, "U* = arg min_U E[∫₀ᵀ (‖Xₜ − X_cible‖² + λ‖Uₜ‖²) dt]",
+              "Commande rTMS optimale : précision thérapeutique contre énergie "
+              "de stimulation.")
+    _statut(
+        doc, "Architecture, non mesure.",
+        "Ce projet ne dispose d'aucune donnée en boucle fermée, et la dose "
+        "administrée n'est pas publiée : la fonction de coût n'a donc rien à "
+        "minimiser. C'est aussi pourquoi la page Boucle clinique indique une "
+        "**direction** et jamais un réglage chiffré.",
+    )
+
+    heading(doc, "A.6 Hypothèse exploratoire 3-6-9 (Tesla)", level=2)
+    _equation(doc, "R₃₆₉ = [P(3f₀) + P(6f₀) + P(9f₀)] / P_total",
+              "Fraction de puissance portée par trois harmoniques d'une "
+              "fréquence fondamentale candidate f₀.")
+    _statut(
+        doc, "Implémentée, testée, et réfutée selon son propre critère.",
+        "Le document exige que H369 soit « considérée comme non soutenue » si "
+        "l'ajout n'améliore pas la performance hors échantillon ou disparaît "
+        "après correction des comparaisons multiples. Les deux se produisent : "
+        "l'ajout du bloc harmonique déplace l'AUC de +0,002 (à l'intérieur de "
+        "l'intervalle de confiance), et sa meilleure variable — r = +0,239, "
+        "p = 0,006 sur la réduction BDI-II, ce qui aurait fait un résultat "
+        "publiable sans correction — remonte à q = 0,235 après Benjamini-"
+        "Hochberg. C'est un résultat, obtenu en appliquant le protocole que "
+        "l'hypothèse demandait.",
+    )
+
+    heading(doc, "A.7 Protocole d'évaluation et règle d'arrêt", level=2)
+    doc.add_paragraph(
+        "Les modèles A à E du protocole HYPO4 §11 sont exécutés par "
+        "« python -m src.reporting.hypo_ablation », chaque barreau n'ajoutant "
+        "qu'un seul bloc au précédent, sur les mêmes patients et les mêmes plis. "
+        "Un modèle n'est déclaré porteur de signal que si les quatre conditions "
+        "sont réunies simultanément :"
+    )
+    bullet(doc, "l'intervalle de confiance à 95 % de l'AUC exclut 0,5 ;")
+    bullet(doc, "le test de permutation donne p ≤ 0,05 ;")
+    bullet(doc, "l'exactitude équilibrée dépasse 0,5 ;")
+    bullet(doc, "les deux classes sont effectivement prédites.")
+    note(
+        doc,
+        "L'exactitude n'entre volontairement pas dans cette règle. Sur cette "
+        "cohorte (83 répondeurs sur 132), le modèle qui répond « répondeur » à "
+        "tout le monde obtient une exactitude de 0,629 et un F1 de 0,768 : deux "
+        "chiffres qui ressemblent à un modèle qui fonctionne. L'exactitude "
+        "équilibrée vaut 0,500 pour ce même modèle, et sa spécificité 0,000.",
+    )
+    _statut(
+        doc, "Contrôle positif — indispensable pour interpréter un résultat nul.",
+        "« La connectivité ne prédit rien » et « la connectivité a été mal "
+        "calculée » produisent le même tableau. Les nouvelles variables sont donc "
+        "confrontées à trois effets d'âge répliqués dans la littérature, sans "
+        "rapport avec la rTMS : aplatissement de la pente 1/f (r = −0,335), "
+        "baisse de la fréquence alpha individuelle (r = −0,174) et baisse de la "
+        "synchronie alpha (r = −0,295). Les trois sont retrouvés avec le bon "
+        "signe. L'instrument fonctionne ; c'est la tâche qui résiste.",
+    )
+
+
+def _equation(doc: Document, formula: str, meaning: str) -> None:
+    """One centred formula followed by its plain-language reading."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run(formula)
+    r.font.name = "Cambria Math"
+    r.font.size = Pt(12)
+    q = doc.add_paragraph()
+    s = q.add_run(meaning)
+    s.italic = True
+    s.font.size = Pt(9.5)
+
+
+def _statut(doc: Document, verdict: str, detail: str) -> None:
+    """The status line that keeps an equation from reading as a feature list."""
+    p = doc.add_paragraph()
+    head = p.add_run("Statut — ")
+    head.bold = True
+    head.font.size = Pt(10)
+    v = p.add_run(verdict + " ")
+    v.bold = True
+    v.font.size = Pt(10)
+    d = p.add_run(detail)
+    d.font.size = Pt(10)
+    doc.add_paragraph()
 
 
 if __name__ == "__main__":

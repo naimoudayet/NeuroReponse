@@ -18,9 +18,16 @@ class SessionRTMS:
     score_post: float | None = None
     statut: str = "planifiee"
 
-    def demarrer(self) -> None:
+    def demarrer(self, date: datetime | None = None) -> None:
+        """Mark the session started, stamping ``date`` (default: now).
+
+        The parameter exists because replaying a *historical* course must not be
+        stamped with the replay time. Without it the seeder's 10 sessions spread
+        over 20 days all landed within one millisecond of each other, collapsing
+        the treatment trajectory the follow-up and loop pages are built to show.
+        """
         self.statut = "en_cours"
-        self.date = datetime.now()
+        self.date = date or datetime.now()
 
     def enregistrer_donnees(self, signal: SignalNeurophysiologique) -> None:
         self.signaux.append(signal)

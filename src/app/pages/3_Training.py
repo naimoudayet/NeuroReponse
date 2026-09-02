@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.app.utils import (
+    PROTOCOLES,
     get_repository,
     has_trained_model,
     list_patient_ids,
@@ -15,7 +16,7 @@ from src.app.utils import (
     source_config,
     source_selector,
 )
-from src.models.lstm import LSTMConfig
+from src.models.lstm import CLASSIFICATION, REGRESSION, LSTMConfig
 from src.models.train import TrainConfig, cross_validate, fit_final_model, save_model
 from src.models.train_tdbrain import sidecar_path
 
@@ -33,7 +34,20 @@ unit = f"{cfg_src.unit}s"
 from_db = bool(choix.modalities)
 MODEL_PATH = choix.model
 
-st.caption(f"**{cfg_src.label}** · modèle **{choix.label}** → `{MODEL_PATH}`")
+st.caption(
+    f"**{cfg_src.label}** · modèle **{choix.label}** · cible "
+    f"**{'ΔBDI (régression)' if choix.is_regression else 'réponse binaire'}**"
+    + (f" · {PROTOCOLES[choix.protocol]}" if choix.protocol is not None else "")
+    + f" → `{MODEL_PATH}`"
+)
+if choix.is_regression:
+    st.info(
+        "**Arm aligné sur l'article** (Arteaga et al., PMC12981298) : cible "
+        "continue, protocoles séparés, score = corrélation de Pearson. "
+        "⚠️ `delta_bdi` est couplé à la sévérité initiale — sur le protocole 1, "
+        "`bdi_pre` seul atteint r = 0.500. Comparez toujours au modèle "
+        "**clinique seul** du même bras avant de conclure quoi que ce soit."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +67,10 @@ def _load_simulated():
 
 
 @st.cache_data(show_spinner="Lecture de la cohorte depuis la base…")
-def _load_from_db(db: str, modalities: tuple[str, ...], zscore: bool):
+def _load_from_db(
+    db: str, modalities: tuple[str, ...], zscore: bool,
+    target: str = "responder", protocol: int | None = None,
+):
     """Rebuild this variant's inputs from the app's own database.
 
     Deliberately the *same* two calls training makes — ``dataset_from_repository``
@@ -66,7 +83,8 @@ def _load_from_db(db: str, modalities: tuple[str, ...], zscore: bool):
 
     ds = dataset_from_repository(Repository(db_url=f"sqlite:///{db}"))
     x, y, groups, names = build_features(
-        ds, modalities=modalities, per_patient_zscore=zscore
+        ds, modalities=modalities, per_patient_zscore=zscore,
+        target=target, protocol=protocol,
     )
     return ds, x, y.astype(np.float32), groups, names
 
@@ -95,7 +113,8 @@ if from_db:
 
     try:
         dataset, x, y, groups, feature_names = _load_from_db(
-            str(cfg_src.db), tuple(choix.modalities), zscore
+            str(cfg_src.db), tuple(choix.modalities), zscore,
+            choix.target, choix.protocol,
         )
     except (ValueError, KeyError) as exc:
         st.error(f"Impossible de reconstruire les entrées de ce modèle : {exc}")
@@ -143,13 +162,21 @@ with left:
                           value=3e-3, format_func=lambda v: f"{v:.0e}")
 with right:
     n_splits = st.slider("Folds (CV patient-wise)", 3, 10, 5)
+    repeats = st.slider(
+        "Répétitions de la CV", 1, 10, 1,
+        help="L'article en utilise 10 : sur 44 patients, un seul découpage "
+             "dépend beaucoup de quels 9 patients tombent en validation.",
+    )
     dropout = st.slider("Dropout", 0.0, 0.6, 0.3, step=0.05)
     seed = st.number_input("Seed", 0, 1000, 0)
 
 
 def _configs():
     return (
-        LSTMConfig(input_size=x.shape[-1], hidden_sizes=(128, 64), dropout=dropout),
+        LSTMConfig(
+            input_size=x.shape[-1], hidden_sizes=(128, 64), dropout=dropout,
+            task=REGRESSION if choix.is_regression else CLASSIFICATION,
+        ),
         TrainConfig(epochs=epochs, batch_size=batch_size, lr=lr,
                     early_stopping_patience=max(3, epochs // 6), seed=seed),
     )
@@ -163,18 +190,49 @@ with tab_cv:
         lstm_cfg, train_cfg = _configs()
         with st.spinner("Entraînement en cours…"):
             cv = cross_validate(x, y, groups, lstm_cfg=lstm_cfg,
-                                train_cfg=train_cfg, n_splits=n_splits)
-        st.session_state[f"last_cv_{source.value}"] = cv
+                                train_cfg=train_cfg, n_splits=n_splits,
+                                repeats=repeats)
+        st.session_state[f"last_cv_{source.value}:{choix.key}"] = cv
 
-    cv = st.session_state.get(f"last_cv_{source.value}")
+    cv = st.session_state.get(f"last_cv_{source.value}:{choix.key}")
     if cv:
         summary = cv.summary()
         a, b, c = st.columns(3)
-        a.metric("Accuracy", f"{summary['accuracy_mean']:.2%}", f"± {summary['accuracy_std']:.2%}")
-        b.metric("AUC", f"{summary['auc_mean']:.2%}", f"± {summary['auc_std']:.2%}")
-        c.metric("F1", f"{summary['f1_mean']:.2%}", f"± {summary['f1_std']:.2%}")
+        if cv.is_regression:
+            from src.models.metrics import regression_report
 
-        if from_db:
+            a.metric("r (moyenne des plis)", f"{summary['r_mean']:+.3f}",
+                     f"± {summary['r_std']:.3f}")
+            b.metric("MAE (points BDI-II)", f"{summary['mae_mean']:.2f}")
+            c.metric("R²", f"{summary['r2_mean']:+.3f}")
+            y_true, y_pred = cv.out_of_fold(y)
+            pooled = regression_report(y_true, y_pred)
+            st.caption(
+                f"Hors-pli groupé : r = {pooled['r']:+.3f}, "
+                f"p (permutation) = {pooled['p_perm']:.3f}, n = {pooled['n']}. "
+                f"Un R² négatif signifie que le modèle fait pire que prédire la "
+                f"moyenne de la cohorte."
+            )
+            if "bdi_pre" in dataset.metadata:
+                from src.data.modalities import protocol_mask
+                from src.models.metrics import pearson_r
+
+                mask = protocol_mask(dataset, choix.protocol)
+                base = pearson_r(
+                    y_true, dataset.metadata["bdi_pre"].to_numpy(float)[mask]
+                )
+                if pooled["r"] <= base:
+                    st.warning(
+                        f"**Le BDI-II de référence seul fait mieux** "
+                        f"(r = {base:+.3f} contre {pooled['r']:+.3f}). Ce modèle "
+                        f"n'apporte rien au-delà du dossier d'admission."
+                    )
+        else:
+            a.metric("Accuracy", f"{summary['accuracy_mean']:.2%}", f"± {summary['accuracy_std']:.2%}")
+            b.metric("AUC", f"{summary['auc_mean']:.2%}", f"± {summary['auc_std']:.2%}")
+            c.metric("F1", f"{summary['f1_mean']:.2%}", f"± {summary['f1_std']:.2%}")
+
+        if from_db and not cv.is_regression:
             base = max(y.mean(), 1 - y.mean())
             if summary["auc_mean"] < 0.6:
                 st.warning(

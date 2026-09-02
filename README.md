@@ -43,6 +43,66 @@ protocol scores *negative* (−0.020); it is confounded with age (p=0.013) and
 carries essentially no information about response (χ² p=0.885, MI 0.0004 nats).
 Use it to stratify, never as a feature.
 
+### The proposed equations were implemented and tested. They do not change it.
+
+A "physics-informed" multi-scale framework (Maxwell → Hodgkin-Huxley → Kuramoto →
+PLV/coherence → LSTM, plus a Kalman/MPC loop and an exploratory Tesla 3-6-9
+harmonic hypothesis) was proposed for this project. The testable part is
+implemented in `src/preprocessing/connectivity.py` and evaluated by
+`python -m src.reporting.hypo_ablation --regression`, which runs the ablation
+ladder that framework itself specifies — each rung adding exactly one block, on
+the same patients and the same folds.
+
+**Three feature families the reference study never computes** now exist:
+synchronisation (PLV, magnitude-squared coherence, the Kuramoto order parameter
+and its metastability — 30 columns), complexity (spectral entropy, the 1/f
+aperiodic exponent as an E:I proxy, frontal alpha asymmetry, individual alpha
+frequency — 6), and the 3-6-9 harmonic ratio (4). Band power is blind to phase,
+so none of this is expressible in the 130 columns the study uses.
+
+| rung | variables | AUC | 95 % CI | PR-AUC | bal. acc | signal |
+|---|---|---|---|---|---|---|
+| A | EEG alone (the study's feature set, 130) | 0.456 | [0.36, 0.55] | 0.604 | 0.461 | — |
+| B | ECG alone (HRV, 5) | 0.394 | [0.30, 0.50] | 0.567 | 0.488 | — |
+| SYNC | synchronisation alone (30) | 0.491 | [0.39, 0.59] | 0.644 | 0.453 | — |
+| CPLX | complexity alone (6) | 0.489 | [0.38, 0.59] | 0.630 | 0.504 | — |
+| G | everything but 3-6-9 (175) | 0.467 | [0.36, 0.58] | 0.635 | 0.496 | — |
+| H369 | everything + 3-6-9 (179) | 0.468 | [0.37, 0.57] | 0.622 | 0.487 | — |
+| | *no-skill reference* | *0.500* | | *0.629* | *0.500* | |
+
+Every rung is at chance; every PR-AUC is **below** the base rate. A rung counts
+as signal only if its AUC interval excludes 0.5, its permutation p clears 5 %,
+its balanced accuracy exceeds 0.5 *and* it predicted both classes — accuracy is
+deliberately excluded, because the all-positive predictor scores 0.629 accuracy
+and 0.768 F1 on this cohort. None qualifies.
+
+**The decisive control.** Retraining the best rung end to end on shuffled labels
+reaches 0.441 / 0.512 / 0.448 against a real 0.491 — indistinguishable. A
+permutation p computed *after* prediction would not have caught this; it once
+reported p = 0.010 for numbers produced by a leak in this very project.
+
+**But the instrument works, and that is what makes the null worth reporting.**
+The same features reproduce three replicated age effects with the correct sign:
+the 1/f exponent flattens with age (r = −0.335, p = 8.7e-5), individual alpha
+frequency declines (r = −0.174, p = 0.046), alpha-band phase synchrony declines
+(r = −0.295, p = 6.0e-4). Mean exponent 1.35 and mean IAF 9.44 Hz are textbook
+values. "Connectivity predicts nothing" and "connectivity was computed wrongly"
+produce identical tables; only a positive control separates them.
+
+**Two hypotheses were refuted rather than left open.**
+
+- *The electromagnetic layer (B/E/J) is empty on this cohort, not merely
+  unimplemented.* Coil current, coil geometry and tissue conductivity are all
+  unpublished, so every derivable quantity reduces to a function of the protocol
+  integer. Proof by rank: adding three physics columns to `[1 | protocol]` leaves
+  the rank at 2.
+- *The 3-6-9 hypothesis fails its own falsification criterion.* Adding the block
+  moves AUC by +0.0017, inside the confidence interval; and its best feature —
+  r = +0.239, p = 0.006 against BDI-II reduction, exactly the kind of hit that
+  becomes a finding when reported uncorrected — rises to q = 0.235 under
+  Benjamini-Hochberg. Zero of 40 features survive FDR on any of the three
+  outcomes.
+
 ### Why this is a result and not a broken pipeline
 
 `src/data/simulator_matched.py` reproduces the real cohort's shape and statistics
@@ -129,6 +189,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 python -m pytest -q                          # 218 tests
 python -m src.data.simulator                 # generate the sequential simulated dataset
+python -m src.reporting.sequence_sweep       # does cumulating sessions help? (page 7)
+python -m src.models.train_article --real-only --n-splits 10 --repeats 10
 python -m src.data.seeder                    # load it into SQLite
 python -m src.data.tdbrain_seeder --matched  # the matched simulated cohort
 streamlit run src/app/main.py                # launch the clinician app
@@ -244,11 +306,84 @@ Enforced by tests, not by convention:
 - **Every Streamlit page renders** — `test_app_pages.py` runs them through
   `AppTest`, because pages are scripts nothing imports.
 
+## The article-aligned arm
+
+The TDBRAIN track was built from Arteaga et al., *"Multiband EEG signatures
+decoded using machine learning for predicting rTMS treatment response in MDD"*
+([PMC12981298](https://pmc.ncbi.nlm.nih.gov/articles/PMC12981298/)). That study
+reports r = 0.401 (protocol 1) and r = 0.255 (protocol 2) on a **continuous**
+target, with **one model per rTMS protocol**. This project's original 2×2 answers
+a different question — a pooled binary responder label — so the two cannot be
+compared directly.
+
+`python -m src.models.train_article --real-only --n-splits 10 --repeats 10`
+trains six checkpoints that match the study's setup: ΔBDI as the target, protocols separated, Pearson r with
+a 100-draw permutation test, on both the real cohort and the matched simulated
+control. Results render at the bottom of page 7, in their own table.
+
+**Measured result** (10 repetitions of 10-fold patient-wise CV, the study's own
+protocol; preprocessing aligned to its Methods — 0.01–50 Hz, 50 Hz notch, common
+average reference):
+
+| variant | n | features | r (out-of-fold) | p (perm.) | r partial | R² | baseline `bdi_pre` alone |
+|---|---|---|---|---|---|---|---|
+| `tdbrain_p1_eeg_reg` | 44 | 130 (EEG only) | −0.373 | 0.990 | −0.370 | −0.370 | **+0.500** |
+| `tdbrain_p1_clin_reg` | 44 | 4 (clinical) | −0.192 | 0.861 | −0.116 | −0.389 | **+0.500** |
+| `tdbrain_p1_multi_reg` | 44 | 139 | −0.215 | 0.931 | −0.107 | −0.386 | **+0.500** |
+| `tdbrain_p2_eeg_reg` | 88 | 130 (EEG only) | −0.419 | 1.000 | −0.403 | −0.251 | **+0.360** |
+| `tdbrain_p2_clin_reg` | 88 | 4 (clinical) | −0.313 | 1.000 | −0.292 | −0.268 | **+0.360** |
+| `tdbrain_p2_multi_reg` | 88 | 139 | −0.334 | 1.000 | −0.316 | −0.263 | **+0.360** |
+
+`*_eeg_reg` is the variant that matches the study, whose model receives **no**
+clinical variables. Reading it against `*_clin_reg` on the same arm is the only
+comparison that says whether the EEG contributed anything — the multimodal row
+takes baseline BDI-II as an *input*, so its r cannot separate the two.
+
+Nothing predicts. Every R² is negative (worse than emitting the cohort mean), and
+predictions vary by under one BDI-II point against a target spread of 12.75.
+
+### A leak that briefly said otherwise
+
+An earlier run of this table reported r = +0.606 on protocol 1 — above the
+study's r = 0.401. It was an artefact. `cross_validate` handed the outer held-out
+fold to `train_one_fold` as its **early-stopping** set, so every fold's weights
+were selected on the patients that fold was then scored on. Retraining the whole
+pipeline on **shuffled** labels reproduced r = +0.65, +0.46, +0.53 — where the
+true signal is zero by construction.
+
+The permutation test did not catch it: it shuffles labels *after* prediction, so
+it only checks the statistic, and it happily returned p = 0.010. Early stopping
+now watches a patient-wise split carved out of the training fold
+(`_inner_split`), and two tests pin it —
+`test_early_stopping_never_watches_the_outer_fold` and
+`test_shuffled_labels_do_not_produce_a_correlation`. Any future claim of signal
+in this project has to clear the shuffled-label retrain, not the p-value.
+
+> The 2×2's stored numbers in `comparison.json` predate both this fix and the
+> preprocessing change. Re-run `train_all` before quoting them alongside this table.
+
+Two methodological gaps with the study remain, and closing them is the next step:
+it decomposes the signal with itEMD and learns sparse spatio-temporal filters
+(SBLEST) where this project averages band power per channel, and its protocol 2
+has 73 patients against 88 here — a difference that is **not** an indication
+filter (that would break the exact 44 = 44 match on protocol 1) and cannot be
+identified from the published metadata.
+
 ## Honest note on the metrics
 
 Two different AUCs appear in the reports: the **mean of per-fold AUCs** (verdict
 panels) and the **pooled out-of-fold AUC** (ROC curves). Both are legitimate,
 they do not match, and the labels say which is which.
+
+**Does cumulating sessions help?** The 2×2 cannot say: both its cohorts are
+baseline-only, so "more timesteps" means more windows of the same two minutes.
+Only the sequential cohort has real visits. Running the same patient-wise CV on
+that cohort truncated to the first *k* sessions (`python -m
+src.reporting.sequence_sweep`, rendered at the bottom of page 7) gives AUC
+**0.923 → 0.996** and accuracy 0.83 → 0.98 from k=1 to k=10, with the fold
+std collapsing **0.109 → 0.008**. Extra sessions do not just raise the mean,
+they stabilise the estimate — which is the architectural argument for the
+clinical loop. Read the curve's *shape*, not its height: see the caveat below.
 
 The legacy sequential simulated cohort reaches AUC ≈ 0.99. That number is
 **artificial** — that simulator deliberately injects a clean alpha-power

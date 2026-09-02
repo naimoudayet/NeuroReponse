@@ -76,14 +76,47 @@ class Repository:
                 sessions=sessions,
             )
 
+    def remplacer_sessions_patient(self, patient: Patient) -> None:
+        """Save ``patient`` as the *whole* truth about their sessions.
+
+        ``sauvegarder_patient`` upserts and never deletes, which is right for the
+        clinical loop — recording session *n+1* must not touch sessions 1..n. It
+        is wrong for a seeder replaying a fixed cohort: a session id that existed
+        in a previous run but not in this one survives as an orphan, lands in the
+        middle of the course by date, and is fed to the model as a real visit.
+
+        Only the sessions are replaced; predictions are keyed to the patient and
+        are left alone.
+        """
+        garder = {sess.id_session for sess in patient.sessions}
+        with self._Session.begin() as s:
+            perimes = list(
+                s.execute(
+                    select(SessionRow.id_session).where(
+                        SessionRow.patient_id == patient.id,
+                        SessionRow.id_session.notin_(garder) if garder else True,
+                    )
+                ).scalars()
+            )
+            if perimes:
+                s.execute(delete(SignalRow).where(SignalRow.session_id.in_(perimes)))
+                s.execute(delete(SessionRow).where(SessionRow.id_session.in_(perimes)))
+        self.sauvegarder_patient(patient)
+
     def rechercher_session(self, id_session: str) -> SessionRTMS | None:
         with self._Session() as s:
             row = s.get(SessionRow, id_session)
             return self._row_to_session(row, s) if row else None
 
     def lister_sessions_patient(self, patient_id: str) -> list[SessionRTMS]:
+        # Same ordering as PatientRow.sessions — this is a treatment course, and
+        # callers index into it positionally.
         with self._Session() as s:
-            rows = s.execute(select(SessionRow).where(SessionRow.patient_id == patient_id)).scalars().all()
+            rows = s.execute(
+                select(SessionRow)
+                .where(SessionRow.patient_id == patient_id)
+                .order_by(SessionRow.date, SessionRow.id_session)
+            ).scalars().all()
             return [self._row_to_session(r, s) for r in rows]
 
     def sauvegarder_prediction(self, prediction: Prediction) -> int:

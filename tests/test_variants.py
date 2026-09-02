@@ -31,9 +31,23 @@ from src.models.variants import (
 
 
 def test_there_are_exactly_four_variants():
-    assert len(VARIANTS) == 4
+    """`ORDERED` stays the 2x2 even though the registry now holds more.
+
+    Page 7 renders `ORDERED` as a four-bar chart of AUCs. The article-aligned arm
+    is a regression scored by Pearson r, so letting it leak into `ORDERED` would
+    put an incomparable quantity on that axis — hence two tuples, not one.
+    """
+    from src.models.variants import ARTICLE_ORDERED, Task
+
     assert len(ORDERED) == 4
-    assert set(ORDERED) == set(VARIANTS)
+    assert set(ORDERED) <= set(VARIANTS)
+    assert all(VARIANTS[v].task is Task.CLASSIFICATION for v in ORDERED)
+    assert all(VARIANTS[v].protocol is None for v in ORDERED)
+
+    # Every registered variant is presented somewhere, exactly once.
+    assert set(ORDERED) | set(ARTICLE_ORDERED) == set(VARIANTS)
+    assert not set(ORDERED) & set(ARTICLE_ORDERED)
+    assert len(ORDERED) + len(ARTICLE_ORDERED) == len(VARIANTS)
 
 
 def test_presentation_order_is_the_one_the_app_must_use():
@@ -53,7 +67,8 @@ def test_presentation_order_is_the_one_the_app_must_use():
 
 
 def test_the_2x2_covers_both_cohorts_and_both_feature_sets():
-    combos = {(c.dataset, c.modalities) for c in VARIANTS.values()}
+    """Scoped to `ORDERED`, since the registry now also holds the article arm."""
+    combos = {(VARIANTS[v].dataset, VARIANTS[v].modalities) for v in ORDERED}
     assert combos == {
         (Dataset.SIMULE, ("rtms",)),
         (Dataset.TDBRAIN, ("rtms",)),
@@ -62,9 +77,29 @@ def test_the_2x2_covers_both_cohorts_and_both_feature_sets():
     }
 
 
+def test_the_article_arm_is_eeg_only_clinical_and_multimodal_per_protocol():
+    """Six variants: three feature sets on each of the two rTMS arms.
+
+    EEG-only exists because the reference study's model receives **no** clinical
+    variables. Without it the app could not ask "does the EEG beat the intake
+    form?" — the multimodal variant takes baseline BDI-II as an input, so its r
+    cannot separate the two.
+    """
+    from src.models.variants import ARTICLE_ORDERED
+
+    arm = {(VARIANTS[v].protocol, VARIANTS[v].modalities) for v in ARTICLE_ORDERED}
+    assert arm == {
+        (1, ("eeg",)), (1, ("rtms",)), (1, ("rtms", "eeg", "ecg")),
+        (2, ("eeg",)), (2, ("rtms",)), (2, ("rtms", "eeg", "ecg")),
+    }
+    assert all(VARIANTS[v].target == "delta_bdi" for v in ARTICLE_ORDERED)
+    assert all(VARIANTS[v].dataset is Dataset.TDBRAIN for v in ARTICLE_ORDERED)
+
+
 def test_each_variant_has_its_own_checkpoint():
+    """No two variants may share a checkpoint path — one would overwrite the other."""
     paths = [c.model for c in VARIANTS.values()]
-    assert len(set(paths)) == 4
+    assert len(set(paths)) == len(VARIANTS)
     assert all(p.suffix == ".pt" for p in paths)
     assert all(c.sidecar.suffix == ".json" for c in VARIANTS.values())
 

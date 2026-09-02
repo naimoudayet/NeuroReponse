@@ -3,7 +3,9 @@ from __future__ import annotations
 import streamlit as st
 
 from src.app.utils import (
+    PROTOCOLES,
     DataSource,
+    current_protocol,
     db_is_empty,
     get_repository,
     has_trained_model,
@@ -25,15 +27,21 @@ st.caption("PFE 2026 — Prédiction de la réponse au traitement rTMS à partir
 source = source_selector()
 cfg_src = source_config(source)
 repo = get_repository(source)
-patient_ids = list_patient_ids(repo)
+protocole = current_protocol(source)
+patient_ids = list_patient_ids(repo, protocole)
 
 choix = model_choice(source)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Cohorte", cfg_src.label)
-col2.metric("Patients en base", len(patient_ids))
+col2.metric(
+    "Patients en base" if protocole is None else "Patients (bras sélectionné)",
+    len(patient_ids),
+)
 col3.metric("Modèle entraîné", "oui" if has_trained_model(source) else "non")
 col4.metric("Variables", choix.label)
+if protocole is not None:
+    st.caption(f"Filtré sur le **{PROTOCOLES[protocole]}**.")
 
 st.divider()
 

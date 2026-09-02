@@ -92,7 +92,30 @@ def test_block_order_is_canonical_not_argument_order(sim_ds):
 
 
 def test_modality_order_constant_matches_reality():
-    assert MODALITY_ORDER == ("rtms", "eeg", "ecg")
+    assert MODALITY_ORDER == ("rtms", "eeg", "ecg", "sync", "cplx", "h369")
+
+
+def test_new_blocks_are_appended_so_old_checkpoints_keep_their_vector():
+    """The network blocks must never be slotted in *between* rtms, eeg and ecg.
+
+    Every checkpoint in ``data/models`` was fit on some subset of the original
+    three blocks, concatenated in that order. Inserting ``sync`` next to ``eeg``
+    — where it belongs thematically — would shift the ECG columns, and each of
+    those checkpoints would silently receive a permuted feature vector: right
+    width, right dtype, wrong meaning, no error anywhere. Appending is what makes
+    that impossible, so the position is pinned rather than left to taste.
+    """
+    assert MODALITY_ORDER[:3] == ("rtms", "eeg", "ecg")
+
+
+def test_the_original_three_blocks_are_unchanged_by_the_new_ones(sim_ds):
+    """A vector built from the old modalities is identical with the new ones present."""
+    old, _, _, old_names = build_features(sim_ds, modalities=("rtms", "eeg", "ecg"))
+    full, _, _, full_names = build_features(
+        sim_ds, modalities=("rtms", "eeg", "ecg", "sync", "cplx", "h369")
+    )
+    assert full_names[: len(old_names)] == old_names
+    np.testing.assert_array_equal(full[..., : old.shape[-1]], old)
 
 
 # --------------------------------------------------------------------------- #

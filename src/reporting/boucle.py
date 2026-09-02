@@ -19,6 +19,7 @@ holds no Streamlit imports so it stays unit-testable.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -211,12 +212,29 @@ def construire_session_montage(
     return sess
 
 
+_INDEX_DANS_ID = re.compile(r"-S(\d+)$")
+
+
 def prochain_index(patient) -> int:
-    """Next session number for this patient (1-based)."""
-    return len(patient.sessions) + 1
+    """Next session number for this patient (1-based).
+
+    Taken from the highest number already used in the session ids rather than
+    from how many there are, so a deleted or missing visit cannot make the loop
+    re-issue an id that already exists. Falls back to the count for sessions
+    whose ids carry no number (the research cohorts, whose "sessions" are
+    epochs — but those are refused by the loop page anyway).
+    """
+    utilises = [
+        int(m.group(1))
+        for sess in patient.sessions
+        if (m := _INDEX_DANS_ID.search(sess.id_session))
+    ]
+    return (max(utilises) if utilises else len(patient.sessions)) + 1
 
 
-def recommandation(etapes: list[EtapeBoucle]) -> list[str]:
+def recommandation(
+    etapes: list[EtapeBoucle], libelle: str = "P(réponse)"
+) -> list[str]:
     """Guidance for the next iteration, derived only from what was measured.
 
     Deliberately conservative: it reports the direction of the last change and
@@ -224,6 +242,14 @@ def recommandation(etapes: list[EtapeBoucle]) -> list[str]:
     settings — nothing in this project's data supports a dose-response claim (the
     TDBRAIN cohort has no per-patient dose at all), so naming an intensity would
     be invention dressed as advice.
+
+    ``libelle`` names the quantity, because two heads feed this. A classification
+    model's value is a probability; the article-aligned regression model's is a
+    **predicted BDI-II reduction** expressed as a fraction of the patient's own
+    baseline. Both sit on [0, 1] against the 50 % criterion, which is what lets
+    one function serve both — but calling a predicted reduction "P(réponse)" on
+    screen would tell a clinician the model is 29 % *confident* when it is in
+    fact predicting a 29 % *improvement*. Different claims entirely.
     """
     if not etapes:
         return ["Aucune séance enregistrée."]
@@ -235,7 +261,7 @@ def recommandation(etapes: list[EtapeBoucle]) -> list[str]:
 
     dernier = avec_tri[-1]
     msgs.append(
-        f"Après {dernier.index} séance(s) : **P(réponse) = {dernier.tri:.0%}** "
+        f"Après {dernier.index} séance(s) : **{libelle} = {dernier.tri:.0%}** "
         f"(seuil {SEUIL_REPONSE:.0%})."
     )
 

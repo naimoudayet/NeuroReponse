@@ -15,8 +15,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
-from src.app.inference import build_model_input
+from src.app.inference import baseline_bdi, build_model_input, responder_scale
 from src.app.utils import (
+    PROTOCOLES,
+    current_protocol,
     get_repository,
     has_trained_model,
     list_patient_ids,
@@ -44,10 +46,13 @@ st.caption(
     f"clinique, trajectoire du modèle (TRI) et cohérence entre les deux."
 )
 
-patient_ids = list_patient_ids(repo)
+protocole = current_protocol(source)
+patient_ids = list_patient_ids(repo, protocole)
 if not patient_ids:
     st.info("Aucun patient en base.")
     st.stop()
+if protocole is not None:
+    st.caption(f"{PROTOCOLES[protocole]} — {len(patient_ids)} patients.")
 
 pid = st.selectbox("Patient", patient_ids)
 patient = repo.charger_patient(pid)
@@ -58,7 +63,8 @@ if patient is None or not patient.sessions:
 # ----------------------------------------------------------------------------- #
 # Model trajectory (optional): the TRI over every session.
 # ----------------------------------------------------------------------------- #
-tri: list[float] | None = None
+tri: list[float] | None = None          # on [0, 1], comparable to the 50 % criterion
+tri_raw: list[float] | None = None      # regression: the same series in BDI-II points
 model_warning: str | None = None
 
 if has_trained_model(source) and (
@@ -73,8 +79,12 @@ if has_trained_model(source) and (
             raise ValueError("contrat de features absent — ré-entraîne le modèle")
         x_input, _fs = build_model_input(patient, is_real, contract)
         with torch.no_grad():
-            t = torch.as_tensor(x_input, dtype=torch.float32)
-            tri = model.predict_tri(t).squeeze(0).cpu().numpy().tolist()
+            # Both heads collapse to the same [0, 1] scale here, so everything
+            # below (analyser_suivi, the 50 % line, the coherence check) reads one
+            # quantity instead of branching in five places.
+            tri, tri_raw = responder_scale(
+                model, x_input, choix.is_regression, baseline_bdi(patient)
+            )
     except (KeyError, ValueError, RuntimeError) as exc:
         model_warning = str(exc)
 else:
@@ -160,7 +170,10 @@ else:
 # ----------------------------------------------------------------------------- #
 # Model trajectory.
 # ----------------------------------------------------------------------------- #
-st.markdown(f"##### Trajectoire du modèle (TRI par {unite})")
+st.markdown(
+    f"##### Réduction BDI-II prédite par {unite}" if choix.is_regression
+    else f"##### Trajectoire du modèle (TRI par {unite})"
+)
 if tri is None:
     st.info(f"Trajectoire du modèle indisponible : {model_warning}.")
 else:
@@ -173,14 +186,25 @@ else:
                    annotation_text="Seuil 50%", annotation_position="bottom left")
     fig2.update_yaxes(range=[0, 1])
     fig2.update_layout(
-        xaxis_title=f"{unite.capitalize()}", yaxis_title="P(réponse)",
+        xaxis_title=f"{unite.capitalize()}",
+        yaxis_title="Réduction prédite / BDI-II initial" if choix.is_regression
+        else "P(réponse)",
         height=340, margin=dict(l=40, r=20, t=20, b=40), showlegend=False,
     )
     st.plotly_chart(fig2, use_container_width=True)
     m1, m2, m3 = st.columns(3)
-    m1.metric("TRI final", f"{syn.tri_final:.0%}")
-    m2.metric("TRI moyen", f"{syn.tri_moyen:.0%}")
+    nom = "Réduction prédite" if choix.is_regression else "TRI"
+    m1.metric(f"{nom} final", f"{syn.tri_final:.0%}")
+    m2.metric(f"{nom} moyen", f"{syn.tri_moyen:.0%}")
     m3.metric(f"Écart-type entre {unite}s", f"{syn.tri_ecart_type:.03f}")
+    if choix.is_regression and tri_raw:
+        st.caption(
+            f"En points BDI-II : {tri_raw[-1]:+.1f} au dernier {unite} "
+            f"(moyenne {sum(tri_raw) / len(tri_raw):+.1f}). L'axe est normalisé "
+            f"par le BDI-II initial du patient pour rester comparable au seuil "
+            f"de 50 % — un gain de 12 points est une réponse à partir de 20, "
+            f"pas à partir de 40."
+        )
     if is_real:
         st.caption(
             f"⚠️ Sur TDBRAIN l'axe est constitué d'**{unite}s d'un même "
@@ -219,7 +243,10 @@ for i, sess in enumerate(patient.sessions):
         "date": sess.date.date(),
         "score_pre": sess.score_pre,
         "score_post": sess.score_post,
-        "TRI": None if tri is None or i >= len(tri) else round(tri[i], 3),
+        ("ΔBDI prédit" if choix.is_regression else "TRI"): (
+            None if tri is None or i >= len(tri)
+            else round((tri_raw or tri)[i], 3)
+        ),
         "nb_signaux": len(sess.signaux),
         "statut": sess.statut,
     })

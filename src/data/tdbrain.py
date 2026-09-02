@@ -93,8 +93,18 @@ class TDBRAINConfig:
 
     # Preprocessing for real BDF recordings (raw TDBRAIN is unfiltered). Ignored
     # for CSV input, which is assumed already clean. Set either to None to disable.
+    # Defaults follow the reference study's pipeline (PMC12981298, Methods):
+    # 50 Hz notch, 0.01 Hz high-pass for DC drift, 50 Hz low-pass, then a common
+    # average reference. The previous (1.0, 45.0) band was this project's own
+    # choice and cut two things the study keeps: the delta band's lower half, and
+    # the 45-50 Hz edge.
     notch_hz: float | None = 50.0               # power-line notch + harmonics (EU=50, US=60)
-    bandpass_hz: tuple[float, float] | None = (1.0, 45.0)   # (high-pass, low-pass) in Hz
+    bandpass_hz: tuple[float, float] | None = (0.01, 50.0)  # (high-pass, low-pass) in Hz
+    # Common average reference. The montage is referenced to whatever the
+    # amplifier used, and band powers are reference-dependent: without this the
+    # features are not the ones the study computed. "average" subtracts the
+    # across-channel mean per sample; None keeps the recording's own reference.
+    reference: str | None = "average"
 
     # participants.tsv column resolution (auto-detected when None).
     col_id: str | None = None
@@ -298,12 +308,31 @@ def _read_condition_bdf(
     return _eeg_from_raw(raw, channels, path.name, notch_hz, bandpass_hz)
 
 
+def _rereference(data: np.ndarray, reference: str | None) -> np.ndarray:
+    """Re-reference ``(n_channels, n_samples)`` in place-safe fashion.
+
+    Only ``"average"`` is supported, because it is what the reference study used
+    and the only montage-wide scheme this project needs. Band power is
+    reference-dependent — the same brain activity yields different per-channel
+    spectra under different references — so skipping this step does not merely
+    add noise, it computes a different feature.
+    """
+    if reference is None:
+        return data
+    if reference != "average":
+        raise ValueError(
+            f"reference must be 'average' or None, got {reference!r}"
+        )
+    return data - data.mean(axis=0, keepdims=True)
+
+
 def _eeg_from_raw(
     raw,
     channels: tuple[str, ...],
     label: str,
     notch_hz: float | None,
     bandpass_hz: tuple[float, float] | None,
+    reference: str | None = "average",
 ) -> np.ndarray:
     """Select, resample and filter the EEG montage from an open mne Raw."""
     present = {str(c).lower().strip(): c for c in raw.ch_names}
@@ -325,6 +354,9 @@ def _eeg_from_raw(
         data = _resample(data, sfreq, SOURCE_FS)
         sfreq = SOURCE_FS
     data = _filter_eeg(data, sfreq, notch_hz, bandpass_hz)
+    # After filtering, before scaling: the average reference is a spatial
+    # operation and must see every montage channel at once.
+    data = _rereference(data, reference)
     return np.ascontiguousarray(data * 1e6, dtype=np.float64)   # Volts -> microvolts
 
 
@@ -401,6 +433,7 @@ def _read_recording(
     ecg_channel: str | None,
     notch_hz: float | None,
     bandpass_hz: tuple[float, float] | None,
+    reference: str | None = "average",
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Read EEG montage **and** autonomic lead from one recording.
 
@@ -409,7 +442,10 @@ def _read_recording(
     open — reading the file once per modality doubled the whole load.
     """
     if path.suffix.lower() != ".bdf":
-        eeg = _read_condition_csv(path, channels)
+        # CSV input is assumed already filtered, but re-referencing is a spatial
+        # operation, not a filter: skipping it here would make the fixture path
+        # compute different features from the BDF path it stands in for.
+        eeg = _rereference(_read_condition_csv(path, channels), reference)
         if ecg_channel is None:
             return eeg, np.zeros(0, dtype=np.float64), SOURCE_FS
         ecg_raw, ecg_fs = _read_ecg(path, ecg_channel)
@@ -422,7 +458,7 @@ def _read_recording(
         _extract_ecg(raw, ecg_channel) if ecg_channel
         else (np.zeros(0, dtype=np.float64), float(raw.info["sfreq"]))
     )
-    eeg = _eeg_from_raw(raw, channels, path.name, notch_hz, bandpass_hz)
+    eeg = _eeg_from_raw(raw, channels, path.name, notch_hz, bandpass_hz, reference)
     return eeg, ecg_raw, ecg_fs
 
 
@@ -640,7 +676,8 @@ def load_tdbrain(cfg: TDBRAINConfig) -> LoadedDataset:
             continue
         try:
             data, ecg_raw, ecg_fs = _read_recording(
-                rec_path, cfg.channels, cfg.ecg_channel, cfg.notch_hz, cfg.bandpass_hz
+                rec_path, cfg.channels, cfg.ecg_channel, cfg.notch_hz,
+                cfg.bandpass_hz, cfg.reference
             )
             data = _resample(data, SOURCE_FS, cfg.target_fs)
             epochs = _epoch(data, cfg, subject_id).astype(np.float32)  # (n_seq, n_ch, window)

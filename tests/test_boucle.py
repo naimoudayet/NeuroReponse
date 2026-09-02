@@ -71,6 +71,18 @@ def test_prochain_index_continues_the_sequence():
     assert prochain_index(p) == 3
 
 
+def test_prochain_index_reads_the_ids_not_the_count():
+    """A gap in the numbering must not make the loop re-issue an existing id.
+
+    Counting sessions instead of reading their numbers handed out an id that a
+    stored session already owned, and `_upsert_session` would then overwrite that
+    session rather than appending a new one — a recorded visit silently lost.
+    """
+    p = _patient([_params(), _params(), _params()])
+    del p.sessions[1]                                   # S01, S03 remain
+    assert prochain_index(p) == 4
+
+
 def test_etapes_pair_each_session_with_its_running_prediction():
     """tri[k] is the prediction using sessions 1..k+1 — the accumulating loop."""
     p = _patient([_params(100.0), _params(110.0), _params(120.0)],
@@ -158,3 +170,22 @@ def test_loop_grows_the_sequence_the_model_consumes():
         # The final TRI value must equal the one-shot probability for that history.
         assert float(tri[0, -1]) == pytest.approx(float(model.predict_proba(x)), abs=1e-6)
     assert lengths == [1, 2, 3, 4]
+
+
+def test_recommandation_never_calls_a_predicted_reduction_a_probability():
+    """The regression head's value is an improvement, not a confidence.
+
+    Both heads land on [0, 1] against the 50 % criterion, which is what lets one
+    function serve both — but printing "P(réponse) = 29 %" for a model that is
+    predicting a 29 % *improvement* tells the clinician something different, and
+    wrong.
+    """
+    p = _patient([_params(), _params()], scores=[28.0, 26.0])
+    etapes = etapes_boucle(p, tri=[0.20, 0.29])
+
+    par_defaut = recommandation(etapes)
+    assert any("P(réponse) = 29%" in m for m in par_defaut)
+
+    regression = recommandation(etapes, libelle="Réduction BDI-II prédite")
+    assert any("Réduction BDI-II prédite = 29%" in m for m in regression)
+    assert not any("P(réponse)" in m for m in regression)

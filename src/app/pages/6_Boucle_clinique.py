@@ -29,8 +29,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
-from src.app.inference import build_model_input, snapshot_input
+from src.app.inference import baseline_bdi, build_model_input, snapshot_input
 from src.app.utils import (
+    PROTOCOLES,
+    current_protocol,
     get_repository,
     has_trained_model,
     list_patient_ids,
@@ -127,7 +129,13 @@ else:
 # --------------------------------------------------------------------------- #
 # Patient selection.
 # --------------------------------------------------------------------------- #
-patient_ids = list_patient_ids(repo)
+protocole = current_protocol(source)
+patient_ids = list_patient_ids(repo, protocole)
+if protocole is not None:
+    st.caption(
+        f"{PROTOCOLES[protocole]} — {len(patient_ids)} patients. Un modèle ajusté "
+        f"sur un bras ne prédit pas sur l'autre traitement."
+    )
 col_sel, col_new = st.columns([3, 2])
 with col_sel:
     pid = st.selectbox("Patient", patient_ids) if patient_ids else None
@@ -180,39 +188,65 @@ if est_cohorte_recherche:
 # --------------------------------------------------------------------------- #
 # Predictions: accumulating (simulated) vs per-session snapshot (TDBRAIN).
 # --------------------------------------------------------------------------- #
-def _predictions(p) -> list[float] | None:
-    """One probability per session, however this source accumulates evidence."""
+def _predictions(p) -> tuple[list[float], list[float]] | None:
+    """``(scaled, raw)`` per session, however this source accumulates evidence.
+
+    ``scaled`` is always on [0, 1] against the 50 % responder criterion, so the
+    loop's plotting, deltas, plateau detection and ``recommandation`` are written
+    once. ``raw`` is what the clinician reads: the same value, in BDI-II points,
+    for a regression model — identical to ``scaled`` for a classification one.
+    """
     if not p.sessions or not all(s.signaux for s in p.sessions):
+        return None
+    bdi_ref = baseline_bdi(p)
+    if choix.is_regression and not bdi_ref:
+        st.warning(
+            "BDI-II de référence absent : la réduction prédite ne peut pas être "
+            "exprimée en proportion du score initial."
+        )
         return None
     try:
         if snapshot:
-            out = []
+            scaled, raw = [], []
             for sess in p.sessions:
                 # The patient carries the clinical block; the session carries the
                 # recording. A multimodal variant needs both.
                 x = snapshot_input(sess, contract, patient=p)
+                t = torch.as_tensor(x, dtype=torch.float32)
                 with torch.no_grad():
-                    out.append(float(model.predict_proba(
-                        torch.as_tensor(x, dtype=torch.float32)).item()))
-            return out
+                    if choix.is_regression:
+                        points = float(model.predict_value(t).item())
+                        raw.append(points)
+                        scaled.append(points / bdi_ref)
+                    else:
+                        proba = float(model.predict_proba(t).item())
+                        raw.append(proba)
+                        scaled.append(proba)
+            return scaled, raw
         x, _fs = build_model_input(p, is_real=False)
         with torch.no_grad():
-            return model.predict_tri(
+            tri = model.predict_tri(
                 torch.as_tensor(x, dtype=torch.float32)
             ).squeeze(0).cpu().numpy().tolist()
+        return tri, tri
     except (ValueError, KeyError, RuntimeError, IndexError) as exc:
         st.warning(f"Prédiction indisponible : {exc}")
         return None
 
 
-tri = _predictions(patient)
+serie = _predictions(patient)
+tri, tri_raw = serie if serie else (None, None)
 etapes = etapes_boucle(patient, tri)
 prochain = prochain_index(patient)
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Séances enregistrées", len(patient.sessions))
 courant = etapes[-1].tri if etapes and etapes[-1].tri is not None else None
-c2.metric("P(réponse) actuelle", f"{courant:.0%}" if courant is not None else "—")
+libelle = "Réduction prédite" if choix.is_regression else "P(réponse) actuelle"
+c2.metric(libelle, f"{courant:.0%}" if courant is not None else "—",
+          delta=(f"{tri_raw[-1]:+.1f} pts BDI-II"
+                 if choix.is_regression and tri_raw else None),
+          delta_color="off")
 dlt = etapes[-1].delta_tri if etapes and etapes[-1].delta_tri is not None else None
 c3.metric("Δ depuis la séance précédente", f"{dlt:+.0%}" if dlt is not None else "—",
           delta=f"{dlt:+.0%}" if dlt is not None else None)
@@ -376,13 +410,17 @@ else:
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=list(range(1, len(vals) + 1)), y=vals, mode="lines+markers",
-            line=dict(color="#a855f7", width=3), name="P(réponse)",
+            line=dict(color="#a855f7", width=3),
+            name="Réduction prédite" if choix.is_regression else "P(réponse)",
         ))
         fig.add_hline(y=SEUIL_REPONSE, line_dash="dash", line_color="#22c55e",
                       annotation_text="Seuil répondeur 50%")
         fig.update_yaxes(range=[0, 1])
         fig.update_layout(
-            xaxis_title="Séance", yaxis_title="P(réponse)", height=320,
+            xaxis_title="Séance",
+            yaxis_title="Réduction prédite / BDI-II initial" if choix.is_regression
+            else "P(réponse)",
+            height=320,
             margin=dict(l=40, r=20, t=20, b=40), showlegend=False,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -398,7 +436,10 @@ else:
     st.dataframe([e.to_row() for e in etapes], hide_index=True, use_container_width=True)
 
     st.markdown("##### Recommandation pour la prochaine séance")
-    for msg in recommandation(etapes):
+    for msg in recommandation(
+        etapes,
+        libelle="Réduction BDI-II prédite" if choix.is_regression else "P(réponse)",
+    ):
         if msg.startswith("⚠️"):
             st.warning(msg)
         elif msg.startswith("✅"):

@@ -62,6 +62,27 @@ class FeatureContract:
     modalities: list[str] = field(default_factory=lambda: ["eeg"])
     ecg_channel: str | None = None
     n_rr: int = 0
+    # Article-aligned axes (Arteaga et al., PMC12981298). Defaulted so every
+    # sidecar written before the regression arm existed still loads as the
+    # pooled binary-responder contract it was.
+    #
+    # `target` is the single source of truth for which head the checkpoint has:
+    # storing a separate "regression" flag alongside it would let the two
+    # disagree, and a contract that contradicts itself is worse than one field.
+    target: str = "responder"
+    protocol: int | None = None
+
+    @property
+    def is_regression(self) -> bool:
+        return self.target != "responder"
+
+    @property
+    def target_label(self) -> str:
+        return {
+            "responder": "réponse (binaire, ≥50 % de réduction)",
+            "delta_bdi": "réduction BDI-II (points)",
+            "pct_reduction": "réduction BDI-II (%)",
+        }.get(self.target, self.target)
 
     def to_dict(self) -> dict:
         return self.__dict__.copy()

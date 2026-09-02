@@ -21,8 +21,19 @@ class PatientRow(Base):
     sexe: Mapped[int | None] = mapped_column(default=None)
     historique_json: Mapped[str] = mapped_column(String, default="[]")
 
+    # Ordered, always. The sequence axis of the LSTM *is* this list: the model
+    # eats sessions[0..n] as timesteps, `etapes_boucle` reads the change from one
+    # to the next, and `analyser_suivi` fits a slope over them. SQLite returns
+    # rows in rowid order absent an ORDER BY, which happens to match the seeders'
+    # insertion order and stops matching the moment a missed visit is recorded
+    # late. That reorders the treatment course silently — no error, just wrong
+    # predictions — so the order is pinned here rather than left to chance.
+    # Date first (the clinical truth), id as tiebreaker for cohorts whose
+    # "sessions" are epochs of one recording and therefore share a timestamp.
     sessions: Mapped[list[SessionRow]] = relationship(
-        back_populates="patient", cascade="all, delete-orphan"
+        back_populates="patient",
+        cascade="all, delete-orphan",
+        order_by="(SessionRow.date, SessionRow.id_session)",
     )
 
 

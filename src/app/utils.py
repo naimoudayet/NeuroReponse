@@ -9,8 +9,10 @@ import streamlit as st
 from ..db import Repository
 from ..models.variants import (
     Dataset,
+    Task,
     Variant,
     VariantConfig,
+    article_variants,
     variant_config,
     variants_for,
 )
@@ -46,6 +48,12 @@ class ModelChoice:
     model: Path
     caption: str
     uses_signals: bool
+    # What the head predicts, and which rTMS arm it was fitted on. The article-
+    # aligned variants (Arteaga et al.) are per-protocol regressions; the original
+    # 2x2 is pooled classification, which is what these defaults describe.
+    target: str = "responder"
+    protocol: int | None = None
+    task: Task = Task.CLASSIFICATION
     # Which feature blocks this model eats, in canonical order. Empty for the
     # legacy checkpoint, which predates the modality system and is rebuilt by the
     # fixed 8-feature pipeline instead.
@@ -62,6 +70,10 @@ class ModelChoice:
     def sidecar(self) -> Path:
         return self.model.with_suffix(".json")
 
+    @property
+    def is_regression(self) -> bool:
+        return self.task is Task.REGRESSION
+
 
 @dataclass(frozen=True)
 class SourceConfig:
@@ -71,6 +83,9 @@ class SourceConfig:
     db: Path
     caption: str
     models: tuple[ModelChoice, ...]
+    # The article-aligned regression arm, kept in its own field so `models` still
+    # means exactly "the 2x2's classification checkpoints" for existing callers.
+    regression_models: tuple[ModelChoice, ...] = ()
     unit: str = "séance"
     is_real: bool = False
     # True when the sequence axis is a real treatment trajectory, so the LSTM
@@ -84,6 +99,14 @@ class SourceConfig:
         """First checkpoint — kept so callers wanting *a* path still work."""
         return self.models[0].model
 
+    @property
+    def all_models(self) -> tuple[ModelChoice, ...]:
+        return self.models + self.regression_models
+
+    @property
+    def supports_regression(self) -> bool:
+        return bool(self.regression_models)
+
 
 def _from_variant(cfg: VariantConfig) -> ModelChoice:
     """Present a 2x2 variant as an app-level choice.
@@ -93,16 +116,26 @@ def _from_variant(cfg: VariantConfig) -> ModelChoice:
     """
     return ModelChoice(
         key=cfg.key.value,
+        # The article-aligned variants carry their own labels, because three
+        # feature sets share this axis there ("EEG seul" vs "Clinique seul" vs
+        # "Multimodal") and `uses_signals` cannot tell the first from the third.
         label=(
-            "Multimodal — clinique + EEG + ECG (139)"
-            if cfg.uses_signals
-            else "Clinique seul (4)"
+            cfg.label
+            if cfg.task is Task.REGRESSION
+            else (
+                "Multimodal — clinique + EEG + ECG (139)"
+                if cfg.uses_signals
+                else "Clinique seul (4)"
+            )
         ),
         model=cfg.model,
         caption=cfg.caption,
         uses_signals=cfg.uses_signals,
         modalities=tuple(cfg.modalities),
         variant=cfg.key,
+        target=cfg.target,
+        protocol=cfg.protocol,
+        task=cfg.task,
     )
 
 
@@ -110,6 +143,16 @@ _SEQ_CAPTION = (
     "Cohorte générée par `src/data/simulator.py` — 10 **séances** rTMS par "
     "patient. C'est la seule source où le LSTM accumule l'information au fil du "
     "traitement ; elle ne fait pas partie de la comparaison 2×2."
+)
+
+# Cohorts offered in the sidebar. All three are selectable: the sequential cohort
+# (the only multi-session treatment course, which the clinical loop needs), the
+# matched simulated cohort and the real one. The last two are the two halves of
+# the 2x2 comparison — the matched cohort was previously hidden on the grounds
+# that it had "neither role", which stopped being true once the app had to serve
+# the four comparison models rather than only describe them on the results page.
+VISIBLE: tuple[DataSource, ...] = (
+    DataSource.SIMULE_SEQ, DataSource.SIMULE, DataSource.TDBRAIN,
 )
 
 SOURCES: dict[DataSource, SourceConfig] = {
@@ -138,6 +181,9 @@ SOURCES: dict[DataSource, SourceConfig] = {
             "**époques** d'un enregistrement de repos unique."
         ),
         models=tuple(_from_variant(c) for c in variants_for(Dataset.SIMULE)),
+        regression_models=tuple(
+            _from_variant(c) for c in article_variants(Dataset.SIMULE)
+        ),
         unit="époque",
     ),
     DataSource.TDBRAIN: SourceConfig(
@@ -149,6 +195,9 @@ SOURCES: dict[DataSource, SourceConfig] = {
             "enregistrement, pas une évolution au fil du traitement."
         ),
         models=tuple(_from_variant(c) for c in variants_for(Dataset.TDBRAIN)),
+        regression_models=tuple(
+            _from_variant(c) for c in article_variants(Dataset.TDBRAIN)
+        ),
         unit="époque",
         is_real=True,
     ),
@@ -158,6 +207,45 @@ _STATE_KEY = "data_source"
 _STATE_KEY_WIDGET = "data_source_widget"
 _MODEL_STATE_KEY = "model_choice"
 _MODEL_STATE_WIDGET = "model_choice_widget"
+_PROTOCOL_STATE_KEY = "protocole"
+_PROTOCOL_STATE_WIDGET = "protocole_widget"
+_TASK_STATE_KEY = "objectif"
+_TASK_STATE_WIDGET = "objectif_widget"
+
+# The two rTMS arms are different treatments, not a nuisance variable: 10 Hz
+# excitatory over the left DLPFC versus 1 Hz inhibitory over the right. The
+# reference study (PMC12981298) fits one model per arm, so the app has to be able
+# to select one — and, crucially, to show only that arm's patients alongside it.
+# No pooled entry: the reference study fits one model per arm, so there is no
+# pooled checkpoint to offer, and a cohort-wide model would answer a different
+# question than the one the sidebar would be labelling.
+PROTOCOLES: dict[int | None, str] = {
+    1: "Protocole 1 — 10 Hz L-DLPFC",
+    2: "Protocole 2 — 1 Hz R-DLPFC",
+}
+
+# What the model predicts. A cohort may hold checkpoints for both heads — the
+# real cohort does — so this is a user choice, not a property of the cohort.
+HEADS: dict[Task, str] = {
+    Task.CLASSIFICATION: "Réponse binaire (répondeur / non-répondeur)",
+    Task.REGRESSION: "Réduction du BDI-II (ΔBDI, continu)",
+}
+
+HEAD_CAPTIONS: dict[Task, str] = {
+    Task.CLASSIFICATION: (
+        "Comparaison 2×2 : deux cohortes × deux jeux de variables, cible binaire, "
+        "**les deux bras rTMS regroupés**. C'est pourquoi aucun protocole n'est "
+        "proposé ici — les points de contrôle correspondants sont mis en commun."
+    ),
+    Task.REGRESSION: (
+        "Arm aligné sur l'étude de référence (Arteaga et al.) : cible continue, "
+        "**un modèle par bras rTMS**, score = corrélation de Pearson."
+    ),
+}
+
+# `None` remains a meaningful protocol value internally — the sequential cohort's
+# model is not per-arm — so it cannot double as "argument not supplied".
+_UNSET: object = object()
 
 # Backwards-compatible defaults (legacy sequential track).
 DB_PATH = SOURCES[DataSource.SIMULE_SEQ].db
@@ -173,14 +261,110 @@ def source_config(source: DataSource | None = None) -> SourceConfig:
     return SOURCES[source or current_source()]
 
 
+def available_heads(cfg: SourceConfig) -> tuple[Task, ...]:
+    """Heads this cohort can actually serve, most-default first.
+
+    Driven by **what is on disk**, not by what the registry declares: a head
+    whose checkpoints were never trained must never appear in the sidebar, which
+    was the original and still-valid reason this was not a user choice. What
+    changed is that it is no longer a per-cohort constant — the real cohort holds
+    both the 2x2's pooled classification pair *and* the article arm's per-protocol
+    regressions, so exactly one of them was unreachable.
+
+    Regression sorts first whenever the cohort has one, because that was the
+    derived value before the head became selectable; every previously recorded
+    default therefore still resolves to the same checkpoint.
+    """
+    present = {m.task for m in cfg.all_models if m.model.exists()}
+    order = (
+        (Task.REGRESSION, Task.CLASSIFICATION)
+        if cfg.supports_regression
+        else (Task.CLASSIFICATION, Task.REGRESSION)
+    )
+    return tuple(t for t in order if t in present)
+
+
+def current_task(source: DataSource | None = None) -> Task:
+    """The selected head, falling back to this cohort's default.
+
+    A stored value naming a head the cohort cannot serve — a session resumed
+    after the checkpoints changed, or a cohort switch — falls back rather than
+    raising, the same rule :func:`source_selector` applies to a hidden cohort.
+    """
+    cfg = source_config(source)
+    heads = available_heads(cfg)
+    if not heads:
+        # No checkpoint on disk at all: keep the old derived answer so the pages
+        # can still explain themselves instead of failing to render.
+        return Task.REGRESSION if cfg.supports_regression else Task.CLASSIFICATION
+    raw = st.session_state.get(f"{_TASK_STATE_KEY}:{cfg.label}")
+    for head in heads:
+        if head.value == raw:
+            return head
+    return heads[0]
+
+
+def current_protocol(source: DataSource | None = None) -> int | None:
+    """Selected rTMS arm, or ``None`` for pooled.
+
+    Only the regression arm is fitted per protocol; the original 2x2 pooled both,
+    so asking for an arm there would promise a filter no checkpoint honours.
+
+    **The head decides, not just the cohort.** The 2x2's classification
+    checkpoints carry ``protocol=None``. Returning an arm while that head is
+    selected would make :func:`available_models` filter on ``m.protocol == 1``,
+    match nothing, and let :func:`model_choice` fall back to ``cfg.models[0]`` —
+    serving a checkpoint the sidebar never selected, with the patient list
+    filtered to one arm and nothing on screen looking wrong. That is the same
+    silent failure the ``_UNSET`` sentinel exists to prevent.
+    """
+    cfg = source_config(source)
+    if not cfg.supports_regression:
+        return None
+    if current_task(source) is Task.CLASSIFICATION:
+        return None
+    raw = st.session_state.get(f"{_PROTOCOL_STATE_KEY}:{cfg.label}")
+    # Protocol 1 by default: every article-aligned checkpoint is fitted on one
+    # arm, so there is no pooled model to fall back to.
+    return raw if raw in (1, 2) else 1
+
+
+def available_models(
+    source: DataSource | None = None,
+    task: Task | None = None,
+    protocol: int | None | object = _UNSET,
+) -> tuple[ModelChoice, ...]:
+    """Checkpoints matching the selected axes, in registry order.
+
+    A protocol-specific request must never fall back to a pooled checkpoint: the
+    pooled model was fitted across **both** arms, so serving it under a
+    "Protocole 1" heading answers a different question than the one on screen —
+    while the page, having filtered its patient list to protocol 1, looks
+    entirely consistent.
+
+    ``protocol`` defaults to the *selected* arm, not to ``None``. Defaulting it to
+    ``None`` made every caller that omitted it — which is every page, via
+    :func:`model_choice` — silently receive the pooled checkpoint while the
+    sidebar said "Protocole 1".
+    """
+    cfg = source_config(source)
+    task = task or current_task(source)
+    arm = current_protocol(source) if protocol is _UNSET else protocol
+    return tuple(
+        m for m in cfg.all_models
+        if m.task is task and m.protocol == arm
+    )
+
+
 def model_choice(source: DataSource | None = None) -> ModelChoice:
     """The model selected for this cohort, defaulting to its first."""
     cfg = source_config(source)
+    options = available_models(source) or cfg.models
     key = st.session_state.get(f"{_MODEL_STATE_KEY}:{cfg.label}")
-    for choice in cfg.models:
+    for choice in options:
         if choice.key == key:
             return choice
-    return cfg.models[0]
+    return options[0]
 
 
 def source_selector(sidebar: bool = True) -> DataSource:
@@ -195,8 +379,14 @@ def source_selector(sidebar: bool = True) -> DataSource:
     the whole app.
     """
     container = st.sidebar if sidebar else st
-    options = list(SOURCES)
+    options = list(VISIBLE)
     current = current_source()
+    # A stored selection can name a cohort that is no longer offered (the matched
+    # simulated one, or a session resumed after the roster changed). Fall back to
+    # the first visible cohort rather than letting `.index()` raise on every page.
+    if current not in options:
+        current = options[0]
+        st.session_state[_STATE_KEY] = current.value
     chosen = container.radio(
         "Cohorte",
         options,
@@ -208,18 +398,63 @@ def source_selector(sidebar: bool = True) -> DataSource:
     container.caption(SOURCES[chosen].caption)
 
     cfg = SOURCES[chosen]
-    if len(cfg.models) > 1:
-        keys = [m.key for m in cfg.models]
+
+    # --- objectif: which head, when the cohort holds checkpoints for both ----- #
+    # Hidden (not disabled) when a cohort serves a single head, for the same
+    # reason the feature-set radio is: a control with one option is a claim that
+    # a choice exists.
+    heads = available_heads(cfg)
+    picked_task = current_task(chosen)
+    if len(heads) > 1:
+        picked_task = container.radio(
+            "Objectif",
+            heads,
+            index=heads.index(picked_task) if picked_task in heads else 0,
+            format_func=lambda t: HEADS[t],
+            key=f"{_TASK_STATE_WIDGET}:{cfg.label}",
+        )
+        st.session_state[f"{_TASK_STATE_KEY}:{cfg.label}"] = picked_task.value
+        container.caption(HEAD_CAPTIONS[picked_task])
+
+    # --- rTMS arm: every article-aligned checkpoint is fitted on one arm ------ #
+    # Regression only. The 2x2's classification checkpoints pool both arms, so an
+    # arm radio there would offer a filter no checkpoint honours.
+    if cfg.supports_regression and picked_task is Task.REGRESSION:
+        arms = [a for a in PROTOCOLES if available_models(chosen, picked_task, a)]
+        current_arm = current_protocol(chosen)
+        picked_arm = container.radio(
+            "Protocole rTMS",
+            arms,
+            index=arms.index(current_arm) if current_arm in arms else 0,
+            format_func=lambda a: PROTOCOLES[a],
+            key=f"{_PROTOCOL_STATE_WIDGET}:{cfg.label}",
+        )
+        st.session_state[f"{_PROTOCOL_STATE_KEY}:{cfg.label}"] = picked_arm
+        container.caption(
+            "La liste des patients est filtrée sur ce bras : les deux protocoles "
+            "sont des traitements différents, et l'étude de référence les modélise "
+            "séparément."
+        )
+    else:
+        picked_arm = None
+
+    # --- feature set --------------------------------------------------------- #
+    options = available_models(chosen, picked_task, picked_arm) or cfg.models
+    if len(options) > 1:
+        keys = [m.key for m in options]
         active = model_choice(chosen)
         picked = container.radio(
             "Jeu de variables",
             keys,
-            index=keys.index(active.key),
-            format_func=lambda k: next(m.label for m in cfg.models if m.key == k),
+            index=keys.index(active.key) if active.key in keys else 0,
+            format_func=lambda k: next(m.label for m in options if m.key == k),
             key=f"{_MODEL_STATE_WIDGET}:{cfg.label}",
         )
         st.session_state[f"{_MODEL_STATE_KEY}:{cfg.label}"] = picked
-        container.caption(next(m.caption for m in cfg.models if m.key == picked))
+        container.caption(next(m.caption for m in options if m.key == picked))
+    elif options:
+        st.session_state[f"{_MODEL_STATE_KEY}:{cfg.label}"] = options[0].key
+        container.caption(options[0].caption)
     return chosen
 
 
@@ -232,13 +467,58 @@ def get_repository(source: DataSource | None = None) -> Repository:
     return _repository_for(f"sqlite:///{source_config(source).db}")
 
 
-def list_patient_ids(repo: Repository) -> list[str]:
+def patient_protocols(repo: Repository) -> dict[str, int | None]:
+    """``{patient_id: rTMS protocol}``, derived from each patient's stimulation
+    parameters — the same mapping training used to split the cohort.
+
+    Read from the stored parameters rather than a column, because the protocol is
+    not persisted as one: it is recovered from frequency + site by
+    ``protocol_from_parameters``, which is the single definition both the seeder
+    and the clinical block already use.
+    """
+    import json
+
+    from sqlalchemy import select
+
+    from ..data.tdbrain_seeder import protocol_from_parameters
+    from ..db.schema import SessionRow
+    from ..domain import RTMSParameters
+
+    out: dict[str, int | None] = {}
+    with repo._Session() as s:
+        rows = s.execute(
+            select(SessionRow.patient_id, SessionRow.parametres_json)
+            .order_by(SessionRow.patient_id, SessionRow.id_session)
+        ).all()
+    for patient_id, params_json in rows:
+        if patient_id in out:
+            continue                      # first session decides; they all agree
+        out[patient_id] = protocol_from_parameters(
+            RTMSParameters(**json.loads(params_json))
+        )
+    return out
+
+
+def list_patient_ids(
+    repo: Repository, protocol: int | None = None
+) -> list[str]:
+    """Patient ids, optionally restricted to one rTMS arm.
+
+    The filter is not cosmetic. A checkpoint fitted on protocol 1 offered a
+    protocol-2 patient would predict across treatment arms and report it as a
+    normal result — the page has no way to notice, because the feature vector is
+    the right shape either way.
+    """
     from sqlalchemy import select
 
     from ..db.schema import PatientRow
 
     with repo._Session() as s:
-        return list(s.execute(select(PatientRow.id).order_by(PatientRow.id)).scalars())
+        ids = list(s.execute(select(PatientRow.id).order_by(PatientRow.id)).scalars())
+    if protocol is None:
+        return ids
+    by_patient = patient_protocols(repo)
+    return [pid for pid in ids if by_patient.get(pid) == protocol]
 
 
 def db_is_empty(repo: Repository) -> bool:

@@ -21,6 +21,22 @@ point the loader at your local copy.
 | Condition | Eyes-open (`EO`) is the default; the reference study found eyes-closed non-significant. |
 | Channels | 26-channel 10-10 montage, 500 Hz native (downsampled to 250 Hz), plus 4 EOG, 1 ECG, 1 EMG and a trigger channel (33 in the BDF). |
 
+### Cohort size vs the reference study (measured)
+
+The article reports **44 + 73 = 117** patients. This project loads **44 + 88 = 132**
+from the same `participants.tsv`, which has exactly 132 rows, every one carrying a
+protocol and BDI pre/post.
+
+**Protocol 1 matches exactly (44 = 44).** That rules out an indication filter:
+restricting to `indication == "MDD"` (dropping `MDD/BIPOLAR`, `MDD/PAIN`,
+`MDD/ANXIETY/TINNITUS`) yields 42 + 86, which would break the protocol-1 match.
+The 15 missing protocol-2 subjects must therefore be excluded by EEG-level quality
+control that the article does not enumerate per subject, and they **cannot be
+identified from the published metadata**.
+
+We keep all 132 and report it. Dropping patients until a number matches would be
+fitting the cohort to the answer.
+
 ### Which modalities co-occur (measured on TDBRAIN V3.1)
 
 | Combination | Subjects |

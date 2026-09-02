@@ -44,13 +44,20 @@ def _patient_from_simulated(
             localisation=str(meta["localisation"]),
             protocole="standard_depression",
         )
+        # One visit every two days — the course this cohort is meant to depict.
+        # Passed to demarrer() too, which would otherwise overwrite it with the
+        # seeding time and flatten all ten sessions onto the same instant.
+        session_date = base_date + timedelta(days=s_idx * 2)
         session = SessionRTMS(
-            id_session=f"{patient_id}-S{s_idx:02d}",
+            # 1-based, like every session the app itself creates
+            # (`construire_session`). Numbering from S00 here made the clinical
+            # loop hand out S11 right after S09.
+            id_session=f"{patient_id}-S{s_idx + 1:02d}",
             patient_id=patient_id,
             parametres=params,
-            date=base_date + timedelta(days=s_idx * 2),
+            date=session_date,
         )
-        session.demarrer()
+        session.demarrer(date=session_date)
         session.enregistrer_donnees(
             SignalNeurophysiologique(
                 type_signal=SignalType.EEG,
@@ -96,7 +103,9 @@ def seed(repo: Repository, dataset: LoadedDataset | None = None, limit: int | No
             metadata_rows=rows.reset_index(drop=True),
             fs=dataset.fs,
         )
-        repo.sauvegarder_patient(patient)
+        # Replace, don't merge: re-seeding must yield exactly this cohort, not
+        # this cohort plus whatever ids a previous run happened to use.
+        repo.remplacer_sessions_patient(patient)
         count += 1
     return count
 

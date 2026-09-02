@@ -56,10 +56,20 @@ def test_every_patient_is_scored_exactly_once(cv_bundle):
 
 
 def test_out_of_fold_labels_line_up_with_their_probabilities(cv_bundle):
+    """Returned in **original patient order**, with each score still on its own patient.
+
+    Order matters beyond tidiness: callers correlate these against per-patient
+    covariates (`bdi_pre`, age) held in the dataset's order. Returning fold order
+    silently paired mismatched vectors and turned a baseline of r = 0.500 into
+    r = 0.090.
+    """
     cv, _x, y, _g, _n = cv_bundle
-    y_true, _ = cv.out_of_fold(y)
-    expected = np.concatenate([np.asarray(y)[f.val_idx] for f in cv.folds])
-    np.testing.assert_array_equal(y_true, expected)
+    y_true, y_proba = cv.out_of_fold(y)
+
+    np.testing.assert_array_equal(y_true, np.asarray(y))
+    # Each fold's stored probabilities must sit at that fold's patient indices.
+    for fold in cv.folds:
+        np.testing.assert_allclose(y_proba[fold.val_idx], fold.val_proba)
 
 
 def test_out_of_fold_rejects_a_result_without_stored_probabilities():

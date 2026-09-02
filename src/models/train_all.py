@@ -73,6 +73,8 @@ def contract_for(
         modalities=list(cfg.modalities),
         ecg_channel="Erbs" if "ecg" in cfg.modalities else None,
         n_rr=int(dataset.ecg.shape[-1]) if ("ecg" in cfg.modalities and dataset.ecg is not None) else 0,
+        target=cfg.target,
+        protocol=cfg.protocol,
     )
 
 
